@@ -56,6 +56,8 @@ def init_db(database_url: str) -> None:
                 ('gs_alt', '30'),
                 ('baud_rate', '9600'),
                 ('altitude_offset', '0'),
+                ('attitude_alpha', '0.98'),
+                ('gyro_scale', '1'),
                 ('control_lock_ttl', '90'),
                 ('station_name', 'Ground Station'),
                 ('station_location', 'Dar es Salaam, Tanzania'),

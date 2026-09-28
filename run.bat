@@ -10,6 +10,6 @@ if not exist ".env" (
     notepad .env
 )
 
-echo Starting TANSAT Ground Station...
+echo Starting TANZANITESAT Ground Station...
 python run.py
 pause

@@ -61,16 +61,17 @@
 {% block scripts %}
 <script>
 /**
- * attitude.js — TANSAT 3D Attitude View
+ * attitude.js — TANZANITESAT 3D Attitude View
  *
  * Data source: the app-wide TansatStream SSE client (stream.js, loaded by
  * base.html) which is fed by the acquisition service reading the serial port
  * (e.g. COM18) via /api/stream. This page must NOT open its own EventSource.
  *
  * Model: 1U CubeSat (10×10×10 cm, scaled ×2) — anodized frame, 4 corner
- * rails, body-mounted solar cells, whip antenna, camera lens, TANSAT label.
+ * rails, body-mounted solar cells, whip antenna, camera lens, TANZANITESAT label.
  * Orientation: telemetry pitch/roll/yaw from the server-side complementary
- * filter, applied via quaternion slerp so motion is smooth between packets.
+ * filter, applied per-axis with a delta-based lerp (SMOOTHNESS constant) so
+ * motion is frame-rate independent and snappy between packets.
  */
 (function () {
     'use strict';
@@ -131,9 +132,14 @@
         }
         if (withLabel) {
             ctx.fillStyle = '#e8e9ef';
-            ctx.font = 'bold 34px Inter, Arial, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('TANSAT', 128, 244);
+            // Auto-fit the (long) mission name onto the 256px face texture
+            const label = 'TANZANITESAT';
+            ctx.font = 'bold 34px Inter, Arial, sans-serif';
+            if (ctx.measureText(label).width > 236) {
+                ctx.font = 'bold 26px Inter, Arial, sans-serif';
+            }
+            ctx.fillText(label, 128, 244);
         }
         const tex = new THREE.CanvasTexture(c);
         tex.anisotropy = 4;
@@ -238,7 +244,11 @@
 
     // ── Telemetry → attitude ─────────────────────────────────────────
     const D2R = Math.PI / 180;
-    const targetQuat = new THREE.Quaternion();      // where the model should go
+    // Delta-based lerp factor (from the React reference Cube component):
+    // larger = snappier, smaller = more lag. Multiplied by frame delta so the
+    // response is identical at any frame rate.
+    const SMOOTHNESS = 5;
+    const targetRot = { pitch: 0, yaw: 0, roll: 0 };  // radians, where the model should go
     let hasAttitude = false;
     let lastPacketTs = 0;
 
@@ -246,7 +256,9 @@
         // Axis mapping (same convention as the server-side attitude filter):
         //   pitch about X · yaw about Y in the previous view; we keep the
         //   flight-hardware convention here: X=pitch, Y=yaw, Z=roll.
-        targetQuat.setFromEuler(new THREE.Euler(pitchDeg * D2R, yawDeg * D2R, rollDeg * D2R, 'XYZ'));
+        targetRot.pitch = (Number(pitchDeg) || 0) * D2R;
+        targetRot.yaw   = (Number(yawDeg)   || 0) * D2R;
+        targetRot.roll  = (Number(rollDeg)  || 0) * D2R;
         hasAttitude = true;
     }
 
@@ -314,9 +326,15 @@
 
     // ── Render loop ──────────────────────────────────────────────────
     let disposed = false;
-    function animate() {
+    let lastFrameTs = performance.now();
+    function animate(now) {
         if (disposed) return;
         requestAnimationFrame(animate);
+
+        // Frame delta in seconds (rAF only passes a timestamp), clamped to
+        // avoid a huge jump after tab suspension — same idea as useFrame's delta.
+        const delta = Math.min((now - lastFrameTs) / 1000, 0.1);
+        lastFrameTs = now;
 
         // Damped camera orbit
         current.theta += (target.theta - current.theta) * 0.12;
@@ -329,12 +347,18 @@
         );
         camera.lookAt(0, 0, 0);
 
-        // Smoothly drive the model toward the latest telemetry attitude
-        if (hasAttitude) cube.quaternion.slerp(targetQuat, 0.15);
+        // Smoothly drive each axis toward its target with a delta-based
+        // lerp (same logic as the React reference Cube component).
+        if (hasAttitude) {
+            const t = THREE.MathUtils.clamp(SMOOTHNESS * delta, 0, 1);
+            cube.rotation.x = THREE.MathUtils.lerp(cube.rotation.x, targetRot.pitch, t);
+            cube.rotation.y = THREE.MathUtils.lerp(cube.rotation.y, targetRot.yaw,   t);
+            cube.rotation.z = THREE.MathUtils.lerp(cube.rotation.z, targetRot.roll,  t);
+        }
 
         renderer.render(scene, camera);
     }
-    animate();
+    animate(performance.now());   // prime lastFrameTs so first delta is valid
 
     // ── Resize ───────────────────────────────────────────────────────
     function onResize() {

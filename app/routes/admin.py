@@ -61,6 +61,53 @@ def settings():
                 pass
             flash("Ground station settings saved.", "success")
 
+        elif action == "save_attitude":
+            keys = ["attitude_alpha", "gyro_scale"]
+            values = {}
+            parse_err = None
+            try:
+                values["attitude_alpha"] = float(request.form.get("attitude_alpha", ""))
+                values["gyro_scale"]   = float(request.form.get("gyro_scale", ""))
+            except ValueError:
+                parse_err = "Alpha and gyro scale must be numeric."
+            if parse_err is None and not (0.0 <= values["attitude_alpha"] <= 1.0):
+                parse_err = "Attitude alpha must be between 0 and 1."
+            if parse_err is None and values["gyro_scale"] <= 0:
+                parse_err = "Gyro scale must be positive."
+            if parse_err:
+                flash(parse_err, "warning")
+            else:
+                for k in keys:
+                    tansat_db.set_setting(k, str(values[k]))
+                tansat_db.audit(
+                    actor_username=current_user.username,
+                    action="settings_update_attitude",
+                    source_ip=request.remote_addr,
+                    detail=str(values),
+                )
+                # Push live into the running acquisition service
+                try:
+                    _svc().update_attitude_config(
+                        alpha=values["attitude_alpha"],
+                        gyro_scale=values["gyro_scale"],
+                    )
+                except Exception:
+                    pass
+                flash(
+                    f"Attitude tuning saved (alpha={values['attitude_alpha']:g}, "
+                    f"gyro scale={values['gyro_scale']:g}).",
+                    "success",
+                )
+                if values["gyro_scale"] > 10:
+                    flash(
+                        "Warning: large gyro scale. With the satellite stationary, "
+                        "any gyro bias is multiplied by this factor and the filter "
+                        "integrates it into continuous rotation (runaway). Confirm "
+                        "the ω readouts show realistic °/s while rotating, and that "
+                        "pitch/roll stay bounded while stationary.",
+                        "warning",
+                    )
+
         elif action == "zero_altitude":
             # Capture current raw altitude_m from last packet as offset
             history = _svc().get_history(limit=1)

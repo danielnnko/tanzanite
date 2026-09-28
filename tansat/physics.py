@@ -38,21 +38,32 @@ def apply_gyro_deadband(rate):
     """Clamp gyro rates with |rate| < 0.05 °/s to exactly zero."""
     return 0.0 if abs(rate) < GYRO_DEADBAND else rate
 
-# §3.4 Complementary attitude filter
-ATTITUDE_ALPHA = 0.98
+# §3.4 Complementary attitude filter — alpha and gyro scale are runtime-tunable
+# via the admin settings page (keys: attitude_alpha, gyro_scale).
+ATTITUDE_ALPHA = 0.98     # accel weight per packet (lower = more responsive)
+GYRO_SCALE   = 1.0        # firmware gyro units → °/s multiplier
 DT_MIN, DT_MAX = 0.005, 0.5
 
 class AttitudeFilter:
-    def __init__(self):
+    def __init__(self, alpha: float = ATTITUDE_ALPHA,
+                 gyro_scale: float = GYRO_SCALE):
+        """
+        alpha:      accelerometer weight per packet; convergence ≈ 1/(1-alpha)
+                    packets (0.98 → ~50, 0.95 → ~20, 0.90 → ~10).
+        gyro_scale: multiplier converting firmware gyro units to °/s
+                    (e.g. raw 16-bit IMU at ±1000 dps → 0.0305).
+        """
+        self.alpha = max(0.0, min(1.0, float(alpha)))
+        self.gyro_scale = float(gyro_scale)
         self.pitch = 0.0
         self.roll  = 0.0
         self.yaw   = 0.0
         self._first = True
 
     def update(self, ax, ay, az, gx, gy, gz, dt):
-        gx = apply_gyro_deadband(gx)
-        gy = apply_gyro_deadband(gy)
-        gz = apply_gyro_deadband(gz)
+        gx = apply_gyro_deadband(gx * self.gyro_scale)
+        gy = apply_gyro_deadband(gy * self.gyro_scale)
+        gz = apply_gyro_deadband(gz * self.gyro_scale)
         dt = max(DT_MIN, min(DT_MAX, dt))
         pitch_acc, roll_acc = accel_orientation(ax, ay, az)
         if self._first:
@@ -60,8 +71,8 @@ class AttitudeFilter:
             self.roll  = roll_acc
             self._first = False
             return self.pitch, self.roll, self.yaw
-        self.pitch = ATTITUDE_ALPHA * (self.pitch + gx * dt) + (1 - ATTITUDE_ALPHA) * pitch_acc
-        self.roll  = ATTITUDE_ALPHA * (self.roll  + gy * dt) + (1 - ATTITUDE_ALPHA) * roll_acc
+        self.pitch = self.alpha * (self.pitch + gx * dt) + (1 - self.alpha) * pitch_acc
+        self.roll  = self.alpha * (self.roll  + gy * dt) + (1 - self.alpha) * roll_acc
         self.yaw   = (self.yaw + gz * dt) % 360.0
         if self.yaw > 180:
             self.yaw -= 360.0

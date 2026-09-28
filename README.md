@@ -1,4 +1,4 @@
-# TANSAT Ground Station Web Application
+# TANZANITESAT Ground Station Web Application
 
 A full-stack, multi-operator CubeSat ground station web application for LEO satellite operations.
 

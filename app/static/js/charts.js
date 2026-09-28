@@ -1,5 +1,5 @@
 /**
- * TANSAT Chart helpers.
+ * TANZANITESAT Chart helpers.
  * Exact series colors per design system §4.
  */
 const SERIES_COLORS = {

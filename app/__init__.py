@@ -62,6 +62,15 @@ def create_app(config: dict | None = None) -> Flask:
     except (ValueError, TypeError) as e:
         logging.warning("Failed to sync GS config from DB: %s", e)
 
+    # Sync attitude filter tuning from DB into service
+    try:
+        svc.update_attitude_config(
+            alpha=float(settings.get("attitude_alpha", 0.98)),
+            gyro_scale=float(settings.get("gyro_scale", 1.0)),
+        )
+    except (ValueError, TypeError) as e:
+        logging.warning("Failed to sync attitude tuning from DB: %s", e)
+
     # ── Flask-Login ───────────────────────────────────────────────
     tansat_auth.login_manager.login_view = "auth.login"
     tansat_auth.login_manager.login_message_category = "warning"
@@ -132,7 +141,7 @@ def _bootstrap_admin(app: Flask) -> None:
             detail="Initial admin account created on first run",
         )
         print("\n" + "═" * 60)
-        print("  TANSAT — First-run bootstrap")
+        print("  TANZANITESAT — First-run bootstrap")
         print("  Username : admin")
         print(f"  Password : {temp_pw}")
         print("  ⚠  Change this password immediately after first login!")

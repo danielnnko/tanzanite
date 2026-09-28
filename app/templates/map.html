@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
 {% block head %}
-<!-- Leaflet CSS -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<!-- Leaflet CSS (vendored locally — CDN failures were killing the whole map) -->
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
 <style>
   /* ── Instrument surface (always dark, per design system §4) ─────────── */
   .instrument-surface {
@@ -27,6 +27,9 @@
     color: #e8e9ef; border-radius: 7px; padding: 5px 10px;
     font-size: 11px; cursor: pointer; transition: background 120ms, border-color 120ms;
     font-family: 'Inter', sans-serif;
+  }
+  .map-btn.layer-btn.active {
+    background: #4f7cff; border-color: #4f7cff; color: #fff;
   }
   .map-btn:hover { background: #161822; }
   .map-btn.active { border-color: #4f7cff; color: #4f7cff; }
@@ -136,6 +139,16 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L9 15"/><path d="M21 3l-7 18-3-7-7-3z"/></svg>
       Follow SAT
     </button>
+    <span style="width:1px; height:18px; background:#2a2d3d; margin:0 2px;"></span>
+    <!-- Base-map layer switcher: dark / streets / terrain / satellite -->
+    <button class="map-btn layer-btn active" id="btn-layer-dark"   data-layer="dark"    title="Dark basemap (default)">Dark</button>
+    <button class="map-btn layer-btn" id="btn-layer-street" data-layer="street"  title="Street map (OSM)">Streets</button>
+    <button class="map-btn layer-btn" id="btn-layer-terrain" data-layer="terrain" title="Terrain / topography (OpenTopoMap)">Terrain</button>
+    <button class="map-btn layer-btn" id="btn-layer-sat"    data-layer="sat"      title="Satellite imagery (Esri World Imagery)">Satellite</button>
+    <span style="width:1px; height:18px; background:#2a2d3d; margin:0 2px;"></span>
+    <!-- Zoom controls: +/- and reset view -->
+    <button class="map-btn" id="btn-zoom-in"  title="Zoom in">+</button>
+    <button class="map-btn" id="btn-zoom-out" title="Zoom out">&minus;</button>
   </div>
 
   <!-- No-fix banner -->
@@ -173,11 +186,11 @@
 {% endblock %}
 
 {% block scripts %}
-<!-- Leaflet JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<!-- Leaflet JS (vendored locally — no CDN dependency) -->
+<script src="/static/vendor/leaflet/leaflet.js"></script>
 <script>
 /**
- * map.js — TANSAT GIS Map View (CartoDB Dark Matter)
+ * map.js — TANZANITESAT GIS Map View (CartoDB Dark Matter)
  *
  * Data sources (all live, all wired into the app core):
  *   • TansatStream 'packet' events — TLM (onboard GPS) and ORB (propagator)
@@ -215,11 +228,45 @@
     worldCopyJump: true,          // satellite crossing ±180° wraps smoothly
   });
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20,
-  }).addTo(map);
+  // ── Base layers (switchable: dark / streets / terrain / satellite) ──
+  const baseLayers = {
+    dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd', maxZoom: 20,
+    }),
+    street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }),
+    terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)',
+      subdomains: 'abc', maxZoom: 17,
+    }),
+    sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
+      maxZoom: 19,
+    }),
+  };
+  let currentBase = 'dark';
+  baseLayers[currentBase].addTo(map);
+
+  function switchBase(name) {
+    if (name === currentBase || !baseLayers[name]) return;
+    map.removeLayer(baseLayers[currentBase]);
+    baseLayers[name].addTo(map);
+    currentBase = name;
+    // z-index discipline: keep vector overlays above the new tile pane
+    if (losLine && map.hasLayer(losLine)) losLine.bringToFront();
+    if (groundTrack && map.hasLayer(groundTrack)) groundTrack.bringToFront();
+  }
+
+  document.querySelectorAll('.layer-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      switchBase(btn.dataset.layer);
+      document.querySelectorAll('.layer-btn').forEach(b =>
+        b.classList.toggle('active', b === btn));
+    });
+  });
 
   // ── Layers ───────────────────────────────────────────────────────────
   // Ground station: dot + accuracy halo
@@ -370,7 +417,7 @@
       }
       return;
     }
-    if (ptype !== 'tlm') return;
+    if (ptype !== 'TLM') return;   // ptype is uppercased above — case must match
 
     if (pkt.gps_lock && pkt.latitude != null && pkt.longitude != null) {
       gpsSeenSinceOrb = false;
@@ -400,6 +447,10 @@
   }
 
   // ── Toolbar actions ──────────────────────────────────────────────────
+  // Zoom in / out (buttons in the top toolbar)
+  $('btn-zoom-in').addEventListener('click', () => map.zoomIn());
+  $('btn-zoom-out').addEventListener('click', () => map.zoomOut());
+
   $('btn-fit').addEventListener('click', () => {
     if (lastFix) {
       map.fitBounds(L.latLngBounds([lastFix.lat, lastFix.lon], [GS_LAT, GS_LON]),
@@ -454,7 +505,7 @@
   }
 
   // Sanity log (helps ops diagnose blank-map reports)
-  console.log('[TANSAT Map] init — GS:', GS_LAT, GS_LON,
+  console.log('[TANZANITESAT Map] init — GS:', GS_LAT, GS_LON,
               '| stream:', !!window.TansatStream);
 })();
 </script>

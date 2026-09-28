@@ -235,6 +235,17 @@ def parse_line(line: str, image_buffer: dict, data_dir: str = 'data') -> dict | 
             bus_voltage = float(parts[12])
             seq = int(parts[13])
 
+            # NaN/Inf guard: float() happily accepts firmware 'nan'/'inf' text,
+            # and stdlib json.dumps then serializes it as bare NaN — which is
+            # INVALID JSON. One such packet makes /api/history unparseable in
+            # every browser (response.json() throws), silently killing the map
+            # view ("AWAITING SATELLITE POSITION" forever). Reject the packet.
+            values = (temperature, pressure_pa, altitude_m, accel_x, accel_y,
+                      accel_z, gyro_x, gyro_y, gyro_z, latitude, longitude,
+                      humidity, bus_voltage)
+            if any(v != v or v in (float('inf'), float('-inf')) for v in values):
+                return None
+
             gps_lock = True
             if latitude == 0.0 or longitude == 0.0:
                 gps_lock = False

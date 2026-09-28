@@ -137,7 +137,7 @@
 {% block scripts %}
 <script>
 /**
- * earth_orbit.js — TANSAT Earth Orbit View
+ * earth_orbit.js — TANZANITESAT Earth Orbit View
  * Three.js r165, loaded in base.html.
  *
  * §8 compliance:
@@ -207,12 +207,17 @@
               (alt_km / EARTH_RADIUS_KM) * EARTH_RADIUS_SCENE;
     const lat = lat_deg * Math.PI / 180;
     const lon = lon_deg * Math.PI / 180;
-    // In Earth-local space (before Earth's rotation is applied):
-    // x = r·cos(lat)·cos(lon), y = r·sin(lat), z = r·cos(lat)·sin(lon)
+    // In Earth-local space (before Earth's rotation is applied).
+    // three.js SphereGeometry UV mapping: u=0 at the International Date Line
+    // with longitude measured NEGATIVE around +Y (left-handed convention),
+    // so the correct mapping negates the lon term on z:
+    //   x = r·cos(lat)·cos(lon), y = r·sin(lat), z = -r·cos(lat)·sin(lon)
+    // Without the negation, longitudes mirror east↔west and Dar es Salaam
+    // (39°E) renders in northeastern Brazil (39°W).
     return new THREE.Vector3(
       r * Math.cos(lat) * Math.cos(lon),
       r * Math.sin(lat),
-      r * Math.cos(lat) * Math.sin(lon),
+      -r * Math.cos(lat) * Math.sin(lon),
     );
   }
 

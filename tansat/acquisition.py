@@ -181,6 +181,46 @@ class HistoryBuffer:
 
 
 # ──────────────────────────────────────────────────────────
+# Session-log replay (cold-start back-fill)
+# ──────────────────────────────────────────────────────────
+_TLM_FLOATS = (
+    "temperature", "pressure_pa", "altitude_m",
+    "accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z",
+    "latitude", "longitude", "humidity", "bus_voltage",
+    "azimuth", "elevation", "slant_km", "range_rate_km_s",
+    "doppler_100mhz", "battery_pct", "pitch", "roll", "yaw",
+)
+
+
+def _csv_row_to_packet(row: dict, gs_alt: float = 0.0) -> Optional[dict]:
+    """Convert one SessionLogger CSV row back into a TLM packet dict.
+
+    The CSV stores only the raw+derived scalars; fields the frontend expects
+    (type, gps_lock bool, true_altitude_m) are reconstructed here.
+    Returns None for malformed rows.
+    """
+    try:
+        pkt: dict = {"type": "tlm"}
+        for key in _TLM_FLOATS:
+            raw = (row.get(key) or "").strip()
+            pkt[key] = float(raw) if raw else 0.0
+            # Skip rows with non-finite values: float('nan') would serialize
+            # as bare NaN in /api/history JSON — invalid for every browser.
+            if pkt[key] != pkt[key] or pkt[key] in (float("inf"), float("-inf")):
+                return None
+        pkt["seq"] = int((row.get("seq") or "0").strip() or 0)
+        pkt["gps_lock"] = (row.get("gps_lock") or "").strip().lower() == "true"
+        for key in ("rssi", "snr"):
+            raw = (row.get(key) or "").strip()
+            pkt[key] = float(raw) if raw else None
+        pkt["server_ts"] = (row.get("server_time") or "").strip() or None
+        pkt["true_altitude_m"] = gs_alt + pkt["altitude_m"]
+        return pkt
+    except (TypeError, ValueError):
+        return None
+
+
+# ──────────────────────────────────────────────────────────
 # CSV session logger
 # ──────────────────────────────────────────────────────────
 class SessionLogger:
@@ -261,6 +301,38 @@ class AcquisitionService:
         self._gs_lon  = 39.280427
         self._gs_alt  = 30.0    # metres MSL
         self._alt_offset = 0.0  # calibration offset
+        # Attitude filter tuning (updated by admin settings)
+        self._attitude_alpha = physics.ATTITUDE_ALPHA
+        self._gyro_scale   = physics.GYRO_SCALE
+
+        # Cold-start back-fill: the rolling history is in-memory only, so
+        # after every app restart the map/earth views had nothing to show
+        # until fresh packets arrived. Replay the newest session CSVs.
+        self._backfill_history_from_disk()
+
+    def _backfill_history_from_disk(self, max_files: int = 3) -> None:
+        """Seed the history buffer from the newest session CSVs on disk."""
+        data_dir = Path(self.data_dir)
+        if not data_dir.exists():
+            return
+        files = sorted(data_dir.glob("session_*.csv"), reverse=True)[:max_files]
+        seeded: list[dict] = []
+        for path in files:
+            try:
+                with open(path, newline="", encoding="utf-8") as fh:
+                    for row in csv.DictReader(fh):
+                        pkt = _csv_row_to_packet(row, gs_alt=self._gs_alt)
+                        if pkt is not None:
+                            seeded.append(pkt)
+            except OSError as e:
+                logger.warning("History back-fill could not read %s: %s", path, e)
+            if len(seeded) >= HISTORY_BUFFER_LEN:
+                break
+        for pkt in seeded[-HISTORY_BUFFER_LEN:]:
+            self.history.append(pkt)
+        if seeded:
+            logger.info("History back-filled with %d packets from session logs",
+                        min(len(seeded), HISTORY_BUFFER_LEN))
 
     # ── Configuration ──
 
@@ -271,6 +343,20 @@ class AcquisitionService:
             self._gs_lon     = gs_lon
             self._gs_alt     = gs_alt
             self._alt_offset = alt_offset
+
+    def update_attitude_config(self, alpha: float, gyro_scale: float) -> None:
+        """Update attitude-filter tuning live (no restart needed).
+
+        Applied immediately to the running AttitudeFilter so a settings save
+        takes effect on the very next telemetry packet.
+        """
+        with self._lock:
+            self._attitude_alpha = alpha
+            self._gyro_scale   = gyro_scale
+            f = self._attitude_filter
+            if f is not None:
+                f.alpha = max(0.0, min(1.0, float(alpha)))
+                f.gyro_scale = float(gyro_scale)
 
     # ── Control ──
 
@@ -288,7 +374,10 @@ class AcquisitionService:
                 return False, f"Serial open failed: {e}"
 
             # Reset physics state on new acquisition
-            self._attitude_filter  = physics.AttitudeFilter()
+            self._attitude_filter  = physics.AttitudeFilter(
+                alpha=self._attitude_alpha,
+                gyro_scale=self._gyro_scale,
+            )
             self._gps_filter       = physics.GpsFilter()
             self._range_rate_filter = physics.RangeRateFilter()
             tlm_parser.reset_stats()

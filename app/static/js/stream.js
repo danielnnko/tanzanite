@@ -1,5 +1,5 @@
 /**
- * TANSAT SSE Stream Client
+ * TANZANITESAT SSE Stream Client
  * Connects to /api/stream, dispatches events to registered page handlers.
  * Auto-reconnects on disconnect.
  */
