@@ -1,0 +1,360 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="dashboard-container" style="display:flex; flex-direction:column; gap:12px;">
+
+    <!-- ── Stat row ─────────────────────────────────────────── -->
+    <div class="stat-row">
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 9L4 4M15 9l5-5M9 15l-5 5M15 15l5 5"/></svg>
+            </div>
+            <div class="stat-body">
+                <div class="stat-label">Spacecraft</div>
+                <div class="stat-value"><span id="stat-spacecraft">&mdash;</span></div>
+                <div class="stat-sub" id="stat-spacecraft-sub">Waiting for telemetry&hellip;</div>
+            </div>
+        </div>
+
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 0116 0"/><path d="M12 15v6M9 21h6"/><circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none"/></svg>
+            </div>
+            <div class="stat-body">
+                <div class="stat-label">Ground Station</div>
+                <div class="stat-value"><span id="stat-gs">{{ 'Online' if status.acquisition_running else 'Offline' }}</span></div>
+                <div class="stat-sub" id="stat-gs-sub">{{ status.port or 'No port' }}{% if status.baud %} · {{ status.baud }} baud{% endif %}</div>
+            </div>
+        </div>
+
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7a5 5 0 010-10h2M15 7h2a5 5 0 010 10h-2M8 12h8"/></svg>
+            </div>
+            <div class="stat-body">
+                <div class="stat-label">Current Link</div>
+                <div class="stat-value">
+                    <span id="stat-link">{{ 'LOCKED' if status.control_lock.held else 'OPEN' }}</span>
+                    <span id="stat-link-badge" class="badge {{ 'solid-success' if status.control_lock.held else 'muted' }}">{{ status.control_lock.holder or 'unassigned' }}</span>
+                </div>
+                <div class="stat-sub">Signal: <span id="stat-signal">&mdash;</span> dBm</div>
+            </div>
+        </div>
+
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14a8 3 0 0016 0V5"/><path d="M4 12a8 3 0 0016 0"/></svg>
+            </div>
+            <div class="stat-body">
+                <div class="stat-label">Packets Logged</div>
+                <div class="stat-value"><span id="stat-packets">&mdash;</span></div>
+                <div class="stat-sub"><span id="stat-lost">{{ status.lost_packets|default(0) }}</span> lost &middot; {{ status.session_log or 'no active session log' }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Main grid: map+charts | craft info+telemetry ────────── -->
+    <div class="main-grid">
+        <div style="display:flex; flex-direction:column; gap:12px;">
+            <div class="card" style="padding:0; overflow:hidden;">
+                <div class="panel-title-row" style="padding:14px 14px 0;">
+                    <div class="panel-title">Satellite Tracking</div>
+                    <div style="display:flex; align-items:center; gap:14px; font-size:11px; color:var(--text-secondary);">
+                        <span><span style="color:var(--danger);">&#9679;</span> Spacecraft</span>
+                        <span><span style="color:var(--accent);">&#9650;</span> Ground Station</span>
+                    </div>
+                </div>
+                <div id="ground-track-map" style="height:320px; width:100%; margin-top:10px;"></div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="card">
+                    <div class="panel-title" style="margin-bottom:10px;">Acceleration</div>
+                    <div style="height:150px;"><canvas id="accel-chart"></canvas></div>
+                </div>
+                <div class="card">
+                    <div class="panel-title" style="margin-bottom:10px;">Gyroscope</div>
+                    <div style="height:150px;"><canvas id="gyro-chart"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:12px;">
+            <div class="card">
+                <div class="panel-title-row">
+                    <div class="panel-title">Spacecraft</div>
+                    <span id="craft-status-badge" class="badge muted">Unknown</span>
+                </div>
+                <div class="kv-list">
+                    <div class="kv-row"><span class="k">Orbit Type</span><span class="v">LEO</span></div>
+                    <div class="kv-row"><span class="k">Altitude</span><span class="v"><span id="craft-alt">&mdash;</span> km</span></div>
+                    <div class="kv-row"><span class="k">Latitude</span><span class="v"><span id="craft-lat">&mdash;</span>&deg;</span></div>
+                    <div class="kv-row"><span class="k">Longitude</span><span class="v"><span id="craft-lon">&mdash;</span>&deg;</span></div>
+                    <div class="kv-row"><span class="k">Next Pass</span><span class="v" id="craft-next-pass">&mdash;</span></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="panel-title" style="margin-bottom:10px;">Real-time Telemetry</div>
+                <div class="kv-list">
+                    <div class="kv-row"><span class="k">Bus Voltage</span><span class="v"><span id="tlm-voltage">&mdash;</span> V</span></div>
+                    <div class="kv-row"><span class="k">Battery</span><span class="v"><span id="tlm-batt">&mdash;</span> %</span></div>
+                    <div class="kv-row"><span class="k">Temperature</span><span class="v"><span id="tlm-temp">&mdash;</span> &deg;C</span></div>
+                    <div class="kv-row"><span class="k">Humidity</span><span class="v"><span id="tlm-hum">&mdash;</span> %</span></div>
+                    <div class="kv-row"><span class="k">Pressure</span><span class="v"><span id="tlm-press">&mdash;</span> hPa</span></div>
+                    <div class="kv-row"><span class="k">Uplink Signal</span><span class="v"><span id="tlm-rssi">&mdash;</span> dBm</span></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="panel-title" style="margin-bottom:10px;">Battery</div>
+                <div class="progress-bar" style="background: var(--border); height: 22px; border-radius: 11px; overflow: hidden; position: relative;">
+                    <div id="battery-fill" style="background: var(--success); height: 100%; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div style="margin-top: 10px; text-align: center; font-size: 12px;">
+                    <span class="mono" id="batt-pct">&mdash;</span>% &nbsp;|&nbsp; <span class="mono" id="batt-v">&mdash;</span> V
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Bottom grid ──────────────────────────────────────────── -->
+    <div class="bottom-grid">
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:10px;">Flight Status</div>
+            <div class="status-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px;">
+                <div>AOS/LOS: <span id="status-aos" class="badge muted">BELOW HORIZON</span></div>
+                <div>GPS Lock: <span id="status-gps" class="badge muted">NO</span></div>
+                <div>Seq: <span class="mono" id="status-seq">&mdash;</span></div>
+                <div>Lost pkts: <span class="mono" id="status-lost">&mdash;</span></div>
+                <div>SNR: <span class="mono" id="status-snr">&mdash;</span> dB</div>
+                <div>Range: <span class="mono" id="status-range">&mdash;</span> km</div>
+                <div>Range-rate: <span class="mono" id="status-rate">&mdash;</span> km/s</div>
+                <div>Doppler: <span class="mono" id="status-doppler">&mdash;</span> Hz</div>
+                <div style="grid-column: 1 / -1;">Pitch/Roll/Yaw: <span class="mono" id="status-pry">&mdash;</span></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="panel-title-row">
+                <div class="panel-title">Antenna Pointing</div>
+                <span class="status-dot connected" style="width:7px;height:7px;"></span>
+            </div>
+            <div class="kv-list" style="margin-bottom:10px;">
+                <div class="kv-row"><span class="k">Azimuth</span><span class="v"><span id="status-az">&mdash;</span>&deg;</span></div>
+                <div class="kv-row"><span class="k">Elevation</span><span class="v"><span id="status-el">&mdash;</span>&deg;</span></div>
+            </div>
+            <div class="polar-wrap">
+                <canvas id="polar-plot" width="180" height="180"></canvas>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:10px;">Recent Events</div>
+            <div id="recent-events" style="display:flex; flex-direction:column; gap:8px; font-size:11.5px; max-height:220px; overflow-y:auto;">
+                <div class="text-muted">No events yet this session.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer-bar">
+        <div><span class="dot-ok">&#9679;</span> Ground Station Operational &nbsp;&middot;&nbsp; <span id="footer-lock">No active alarms</span></div>
+        <div>GroundStation v2.0</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // ── Ground-track map ────────────────────────────────────────
+    const map = L.map('ground-track-map', {zoomControl: false}).setView([{{ gs_lat_g }}, {{ gs_lon_g }}], 2);
+    L.control.zoom({position: 'topright'}).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+    const gsLat = {{ gs_lat_g }};
+    const gsLon = {{ gs_lon_g }};
+
+    const gsIcon = L.divIcon({className: 'gs-marker', html: '<div style="color: var(--accent); font-size: 20px;">&#9650;</div>', iconSize: [20, 20], iconAnchor: [10, 10]});
+    L.marker([gsLat, gsLon], {icon: gsIcon}).addTo(map);
+
+    const satIcon = L.circleMarker([0,0], {color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1, radius: 6});
+    let satAdded = false;
+    let losLine = L.polyline([], {color: '#8b96b3', dashArray: '5, 5', weight: 2});
+
+    // ── Charts ──────────────────────────────────────────────────
+    const chartOpts = { responsive: true, maintainAspectRatio: false, animation: false,
+        elements: { point: { radius: 0 } },
+        scales: { x: { display: false }, y: { ticks: { color: '#8b96b3', font: {size: 9} }, grid: { color: '#1e2a44' } } },
+        plugins: { legend: { labels: { color: '#8b96b3', boxWidth: 10, font: {size: 10} } } } };
+
+    const accelChart = new Chart(document.getElementById('accel-chart'), { type: 'line', data: { labels: [], datasets: [
+        { label: 'X', borderColor: '#ef4444', data: [] },
+        { label: 'Y', borderColor: '#22c55e', data: [] },
+        { label: 'Z', borderColor: '#3b82f6', data: [] } ] }, options: chartOpts });
+    const gyroChart = new Chart(document.getElementById('gyro-chart'), { type: 'line', data: { labels: [], datasets: [
+        { label: 'X', borderColor: '#ec4899', data: [] },
+        { label: 'Y', borderColor: '#f0a020', data: [] },
+        { label: 'Z', borderColor: '#00d4ff', data: [] } ] }, options: chartOpts });
+
+    function pushChart(chart, x, y, z) {
+        chart.data.labels.push('');
+        chart.data.datasets[0].data.push(x);
+        chart.data.datasets[1].data.push(y);
+        chart.data.datasets[2].data.push(z);
+        if (chart.data.labels.length > 40) {
+            chart.data.labels.shift();
+            chart.data.datasets.forEach(d => d.data.shift());
+        }
+        chart.update('none');
+    }
+
+    // ── Polar az/el plot ────────────────────────────────────────
+    const polarCanvas = document.getElementById('polar-plot');
+    const pctx = polarCanvas.getContext('2d');
+    function drawPolar(az, el) {
+        const w = polarCanvas.width, h = polarCanvas.height;
+        const cx = w/2, cy = h/2, r = w/2 - 12;
+        pctx.clearRect(0, 0, w, h);
+        pctx.strokeStyle = '#1e2a44';
+        pctx.lineWidth = 1;
+        [1, 0.66, 0.33].forEach(f => { pctx.beginPath(); pctx.arc(cx, cy, r*f, 0, Math.PI*2); pctx.stroke(); });
+        pctx.beginPath(); pctx.moveTo(cx-r, cy); pctx.lineTo(cx+r, cy);
+        pctx.moveTo(cx, cy-r); pctx.lineTo(cx, cy+r); pctx.stroke();
+        pctx.fillStyle = '#5f6c8a'; pctx.font = '9px Inter'; pctx.textAlign = 'center';
+        pctx.fillText('N', cx, cy-r-3); pctx.fillText('S', cx, cy+r+10);
+        pctx.fillText('E', cx+r+7, cy+3); pctx.fillText('W', cx-r-7, cy+3);
+        if (az === null || el === null || el < 0) return;
+        const rad = (90 - el) / 90 * r;
+        const theta = (az - 90) * Math.PI / 180;
+        const px = cx + rad * Math.cos(theta);
+        const py = cy + rad * Math.sin(theta);
+        pctx.strokeStyle = '#22c55e'; pctx.lineWidth = 2;
+        pctx.beginPath(); pctx.moveTo(cx, cy); pctx.lineTo(px, py); pctx.stroke();
+        pctx.fillStyle = '#22c55e'; pctx.beginPath(); pctx.arc(px, py, 4, 0, Math.PI*2); pctx.fill();
+    }
+    drawPolar(null, null);
+
+    // ── Recent events (built live from SSE, never fabricated) ───
+    const eventsBox = document.getElementById('recent-events');
+    let eventsSeeded = false;
+    function addEvent(text, tone) {
+        if (!eventsSeeded) { eventsBox.innerHTML = ''; eventsSeeded = true; }
+        const row = document.createElement('div');
+        const t = new Date().toISOString().substr(11, 8);
+        const color = tone === 'ok' ? 'var(--success)' : tone === 'warn' ? 'var(--warning)' : 'var(--accent)';
+        row.innerHTML = `<span class="mono text-muted">${t}</span> &nbsp;<span style="color:${color}">&#9679;</span> ${text}`;
+        eventsBox.prepend(row);
+        while (eventsBox.children.length > 8) eventsBox.removeChild(eventsBox.lastChild);
+    }
+
+    let lastPacketAt = 0;
+    setInterval(() => {
+        const sc = document.getElementById('stat-spacecraft');
+        const sub = document.getElementById('stat-spacecraft-sub');
+        if (lastPacketAt && (Date.now() - lastPacketAt) < 8000) {
+            sc.textContent = 'Online'; sc.style.color = 'var(--success)';
+            sub.textContent = 'Last packet ' + Math.round((Date.now()-lastPacketAt)/1000) + 's ago';
+        } else {
+            sc.textContent = 'No Signal'; sc.style.color = 'var(--danger)';
+            sub.textContent = lastPacketAt ? 'Signal lost' : 'Waiting for telemetry…';
+        }
+    }, 1000);
+
+    let packetCount = 0;
+
+    if (window.TansatStream) {
+        const f = TansatStream.fmt;
+
+        TansatStream.on('status', (data) => {
+            document.getElementById('stat-gs').textContent = data.acquisition_running ? 'Online' : 'Offline';
+            document.getElementById('stat-gs-sub').textContent = (data.port || 'No port') + (data.baud ? ' · ' + data.baud + ' baud' : '');
+            const held = data.control_lock && data.control_lock.held;
+            document.getElementById('stat-link').textContent = held ? 'LOCKED' : 'OPEN';
+            const badge = document.getElementById('stat-link-badge');
+            badge.textContent = (data.control_lock && data.control_lock.holder) || 'unassigned';
+            badge.className = 'badge ' + (held ? 'solid-success' : 'muted');
+            document.getElementById('status-lost').textContent = f.num(data.lost_packets, 0);
+            document.getElementById('stat-lost').textContent = f.num(data.lost_packets, 0);
+        });
+
+        TansatStream.on('packet', (data) => {
+            if (data.type === 'ORB') {
+                if (data.next_aos) document.getElementById('craft-next-pass').textContent = data.next_aos + ' (AOS)';
+                return;
+            }
+            if (data.type !== 'tlm') return;
+
+            lastPacketAt = Date.now();
+            packetCount++;
+            document.getElementById('stat-packets').textContent = packetCount;
+            document.getElementById('stat-signal').textContent = f.num(data.rssi, 0);
+
+            document.getElementById('craft-alt').innerHTML = data.true_altitude_m != null ? f.num(data.true_altitude_m/1000, 2) : '\u2014';
+            document.getElementById('craft-lat').innerHTML = f.geo(data.latitude, data.gps_lock);
+            document.getElementById('craft-lon').innerHTML = f.geo(data.longitude, data.gps_lock);
+
+            const cBadge = document.getElementById('craft-status-badge');
+            cBadge.textContent = data.gps_lock ? 'Active' : 'No Fix';
+            cBadge.className = 'badge ' + (data.gps_lock ? 'solid-success' : 'muted');
+
+            document.getElementById('tlm-voltage').innerHTML = f.num(data.bus_voltage, 2);
+            document.getElementById('tlm-batt').innerHTML = f.num(data.battery_pct, 1);
+            document.getElementById('tlm-temp').innerHTML = f.num(data.temperature, 1);
+            document.getElementById('tlm-hum').innerHTML = f.num(data.humidity, 1);
+            document.getElementById('tlm-press').innerHTML = data.pressure_pa != null ? f.num(data.pressure_pa/100, 1) : '\u2014';
+            document.getElementById('tlm-rssi').innerHTML = f.num(data.rssi, 0);
+
+            document.getElementById('batt-pct').innerHTML = f.num(data.battery_pct, 1);
+            document.getElementById('batt-v').innerHTML = f.num(data.bus_voltage, 2);
+            document.getElementById('battery-fill').style.width = (data.battery_pct || 0) + '%';
+
+            document.getElementById('status-seq').innerHTML = f.num(data.seq, 0);
+            document.getElementById('status-snr').innerHTML = f.num(data.snr, 0);
+            document.getElementById('status-az').innerHTML = f.num(data.azimuth, 1);
+            document.getElementById('status-el').innerHTML = f.num(data.elevation, 1);
+            document.getElementById('status-range').innerHTML = f.num(data.slant_km, 2);
+            document.getElementById('status-rate').innerHTML = data.range_rate_km_s != null ? f.num(data.range_rate_km_s, 3) : '—';
+            document.getElementById('status-doppler').innerHTML = data.doppler_100mhz != null ? f.num(data.doppler_100mhz, 1) : '—';
+
+            const pry = data.pitch != null ? `${f.num(data.pitch,1)} / ${f.num(data.roll,1)} / ${f.num(data.yaw,1)}` : '\u2014';
+            document.getElementById('status-pry').innerHTML = pry;
+
+            const aos = document.getElementById('status-aos');
+            const inPass = data.elevation != null && data.elevation > 0 && data.gps_lock;
+            aos.className = 'badge ' + (inPass ? 'solid-success' : 'muted');
+            aos.textContent = inPass ? 'IN PASS' : 'BELOW HORIZON';
+
+            const gps = document.getElementById('status-gps');
+            gps.className = 'badge ' + (data.gps_lock ? 'solid-success' : 'danger');
+            gps.textContent = data.gps_lock ? 'YES' : 'NO';
+
+            drawPolar(data.gps_lock ? data.azimuth : null, data.gps_lock ? data.elevation : null);
+
+            if (data.gps_lock) {
+                satIcon.setLatLng([data.latitude, data.longitude]);
+                if (!satAdded) { satIcon.addTo(map); satAdded = true; }
+                if (data.elevation > 0) {
+                    losLine.setLatLngs([[gsLat, gsLon], [data.latitude, data.longitude]]);
+                    if (!map.hasLayer(losLine)) losLine.addTo(map);
+                } else if (map.hasLayer(losLine)) { map.removeLayer(losLine); }
+            } else {
+                if (satAdded) { map.removeLayer(satIcon); satAdded = false; }
+                if (map.hasLayer(losLine)) map.removeLayer(losLine);
+            }
+
+            pushChart(accelChart, data.accel_x, data.accel_y, data.accel_z);
+            pushChart(gyroChart, data.gyro_x, data.gyro_y, data.gyro_z);
+        });
+
+        TansatStream.on('control', (data) => {
+            addEvent('Control lock ' + (data.held ? ('taken by ' + data.holder) : 'released'), 'warn');
+        });
+        TansatStream.on('uplink', (data) => {
+            addEvent((data.direction === 'tx' ? 'Uplink sent: ' : 'ACK received: ') + (data.raw || ''), 'ok');
+        });
+        TansatStream.on('image', (data) => {
+            addEvent('Payload image received' + (data.satellite_id ? ' from ' + data.satellite_id : ''), 'ok');
+        });
+    }
+</script>
+{% endblock %}

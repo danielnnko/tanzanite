@@ -1,0 +1,165 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="display:flex; flex-direction:column; gap:12px;">
+
+    <div class="card">
+        <div class="panel-title-row">
+            <div class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+                Pass Schedules
+            </div>
+            <a href="/api/export/orb.xlsx" class="btn btn-success" style="text-decoration:none;">Export Excel</a>
+        </div>
+
+        <table class="table data-table-sm">
+            <thead>
+                <tr><th>#</th><th>AOS (UTC)</th><th>LOS (UTC)</th><th>Duration</th><th>Max El</th><th>Status</th></tr>
+            </thead>
+            <tbody id="pass-log-body">
+                <tr id="no-pass-row"><td colspan="6" class="text-muted">No passes observed yet this session &mdash; a row appears here the moment the spacecraft rises above the horizon.</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="bottom-grid" style="grid-template-columns: 1.3fr 1fr;">
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:10px;">Polar Az/El &mdash; Live Track</div>
+            <div class="polar-wrap"><canvas id="polar-plot" width="320" height="320"></canvas></div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:12px;">
+            <div class="card">
+                <div class="panel-title" style="margin-bottom:10px;">Current Pointing</div>
+                <div class="kv-list">
+                    <div class="kv-row"><span class="k">Azimuth</span><span class="v" id="trk-az">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Elevation</span><span class="v" id="trk-el">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Range</span><span class="v" id="trk-range">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Range Rate</span><span class="v" id="trk-rate">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Doppler</span><span class="v" id="trk-doppler">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Latitude</span><span class="v" id="trk-lat">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Longitude</span><span class="v" id="trk-lon">&mdash;</span></div>
+                    <div class="kv-row"><span class="k">Altitude</span><span class="v" id="trk-alt">&mdash;</span></div>
+                </div>
+            </div>
+            <div class="alert alert-info" style="margin:0;">
+                Next-AOS prediction shown here when an ORB packet with orbital elements is received. Full TLE/SGP4-based scheduling isn't wired up yet.
+                <div style="margin-top:6px;">Next AOS: <span class="mono" id="next-aos">&mdash;</span> &nbsp; Max El: <span class="mono" id="next-maxel">&mdash;</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const canvas = document.getElementById('polar-plot');
+    const ctx = canvas.getContext('2d');
+    const cx = 160, cy = 160, rMax = 138;
+    let historyTrail = [];
+
+    function drawPolar() {
+        ctx.clearRect(0, 0, 320, 320);
+        ctx.strokeStyle = '#1e2a44'; ctx.lineWidth = 1;
+        for (let el of [0, 30, 60, 90]) {
+            const r = rMax * ((90 - el) / 90);
+            if (r > 0) { ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.stroke(); }
+        }
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - rMax); ctx.lineTo(cx, cy + rMax);
+        ctx.moveTo(cx - rMax, cy); ctx.lineTo(cx + rMax, cy);
+        ctx.stroke();
+        ctx.fillStyle = '#5f6c8a'; ctx.font = '11px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('N', cx, cy - rMax - 12); ctx.fillText('S', cx, cy + rMax + 12);
+        ctx.fillText('E', cx + rMax + 12, cy); ctx.fillText('W', cx - rMax - 12, cy);
+
+        if (historyTrail.length > 1) {
+            ctx.beginPath(); ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)'; ctx.lineWidth = 2;
+            historyTrail.forEach((pt, i) => {
+                const r = rMax * ((90 - pt.el) / 90);
+                const a = (pt.az - 90) * Math.PI / 180;
+                const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+        if (historyTrail.length > 0) {
+            const pt = historyTrail[historyTrail.length - 1];
+            const r = rMax * ((90 - pt.el) / 90);
+            const a = (pt.az - 90) * Math.PI / 180;
+            const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+            ctx.fillStyle = '#22c55e'; ctx.beginPath(); ctx.arc(x, y, 6, 0, 2*Math.PI); ctx.fill();
+        }
+    }
+    drawPolar();
+
+    // ── Real pass log built from observed elevation crossings ───
+    const passBody = document.getElementById('pass-log-body');
+    const noPassRow = document.getElementById('no-pass-row');
+    let inPass = false, passAos = null, passMaxEl = -90, passNum = 0;
+
+    function fmtTime(d) { return d.toISOString().substr(11, 8) + ' UTC'; }
+
+    function startPass() {
+        inPass = true; passAos = new Date(); passMaxEl = -90; passNum++;
+        if (noPassRow) noPassRow.style.display = 'none';
+        const tr = document.createElement('tr');
+        tr.id = 'pass-row-current';
+        tr.innerHTML = `<td>${passNum}</td><td>${fmtTime(passAos)}</td><td>&mdash;</td><td>&mdash;</td><td id="pass-maxel">&mdash;</td><td><span class="badge solid-success">In Pass</span></td>`;
+        passBody.prepend(tr);
+    }
+    function updatePass(el) {
+        if (el > passMaxEl) {
+            passMaxEl = el;
+            const cell = document.getElementById('pass-maxel');
+            if (cell) cell.textContent = passMaxEl.toFixed(1) + '\u00b0';
+        }
+    }
+    function endPass() {
+        inPass = false;
+        const row = document.getElementById('pass-row-current');
+        if (row) {
+            row.id = '';
+            const los = new Date();
+            const durMin = Math.round((los - passAos) / 60000);
+            row.children[2].textContent = fmtTime(los);
+            row.children[3].textContent = durMin + ' min';
+            row.children[5].innerHTML = '<span class="badge muted">Completed</span>';
+        }
+    }
+
+    if (window.TansatStream) {
+        const f = TansatStream.fmt;
+
+        TansatStream.on('packet', (data) => {
+            if (data.type === 'ORB') {
+                if (data.next_aos) document.getElementById('next-aos').textContent = data.next_aos;
+                if (data.max_elevation != null) document.getElementById('next-maxel').textContent = data.max_elevation.toFixed(1) + '\u00b0';
+                return;
+            }
+            if (data.type !== 'tlm') return;
+
+            const ok = data.gps_lock;
+            document.getElementById('trk-az').innerHTML = ok ? f.num(data.azimuth, 1) + '\u00b0' : '\u2014';
+            document.getElementById('trk-el').innerHTML = ok ? f.num(data.elevation, 1) + '\u00b0' : '\u2014';
+            document.getElementById('trk-range').innerHTML = ok ? f.num(data.slant_km, 2) + ' km' : '\u2014';
+            document.getElementById('trk-rate').innerHTML = ok ? f.num(data.range_rate_km_s, 3) + ' km/s' : '\u2014';
+            document.getElementById('trk-doppler').innerHTML = ok ? f.num(data.doppler_100mhz, 1) + ' Hz' : '\u2014';
+            document.getElementById('trk-lat').innerHTML = f.geo(data.latitude, ok);
+            document.getElementById('trk-lon').innerHTML = f.geo(data.longitude, ok);
+            document.getElementById('trk-alt').innerHTML = ok ? f.num(data.true_altitude_m, 0) + ' m' : '\u2014';
+
+            const elevation = ok ? data.elevation : -90;
+            if (elevation > 0 && !inPass) startPass();
+            if (elevation > 0 && inPass) updatePass(elevation);
+            if (elevation <= 0 && inPass) endPass();
+
+            if (ok && data.azimuth != null && data.elevation != null) {
+                historyTrail.push({az: data.azimuth, el: data.elevation});
+                if (historyTrail.length > 80) historyTrail.shift();
+                drawPolar();
+            }
+        });
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header">
+    <h1>Audit Trail</h1>
+</div>
+
+<div class="card" style="margin-bottom: 1rem;">
+    <div class="card-body" style="display: flex; gap: 15px;">
+        <input type="text" id="filter-actor" placeholder="Filter by Actor" style="padding: 5px;">
+        <input type="text" id="filter-action" placeholder="Filter by Action" style="padding: 5px;">
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body" style="overflow-x: auto;">
+        <table class="dense" style="width: 100%; text-align: left; border-collapse: collapse;" id="audit-table">
+            <thead>
+                <tr style="border-bottom: 1px solid #333;">
+                    <th>Timestamp (UTC)</th>
+                    <th>Actor</th>
+                    <th>Action</th>
+                    <th>Target</th>
+                    <th>Source IP</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if rows %}
+                    {% for row in rows %}
+                    <tr class="audit-row" style="border-bottom: 1px solid #222;">
+                        <td class="tlm-value">{{ row.timestamp }}</td>
+                        <td class="actor-col">{{ row.actor }}</td>
+                        <td class="action-col">{{ row.action }}</td>
+                        <td>{{ row.target or '—' }}</td>
+                        <td>{{ row.source_ip or '—' }}</td>
+                        <td>{{ row.detail or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="6">No audit records found.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+        
+        <div style="margin-top: 15px; display: flex; gap: 10px;">
+            {% if offset > 0 %}
+            <a href="?offset={{ offset - limit }}&limit={{ limit }}" class="btn btn-sm">Previous</a>
+            {% endif %}
+            {% if rows|length == limit %}
+            <a href="?offset={{ offset + limit }}&limit={{ limit }}" class="btn btn-sm">Next</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const filterActor = document.getElementById('filter-actor');
+    const filterAction = document.getElementById('filter-action');
+    const rows = document.querySelectorAll('.audit-row');
+    
+    function applyFilter() {
+        const actorVal = filterActor.value.toLowerCase();
+        const actionVal = filterAction.value.toLowerCase();
+        
+        rows.forEach(row => {
+            const actor = row.querySelector('.actor-col').innerText.toLowerCase();
+            const action = row.querySelector('.action-col').innerText.toLowerCase();
+            
+            if (actor.includes(actorVal) && action.includes(actionVal)) {
+                row.style.display = '';
+            } else {
+                row.style.display = 'none';
+            }
+        });
+    }
+    
+    filterActor.addEventListener('input', applyFilter);
+    filterAction.addEventListener('input', applyFilter);
+</script>
+{% endblock %}

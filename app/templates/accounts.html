@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header">
+    <h1>Operator Accounts</h1>
+</div>
+
+{% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <div class="alerts">
+      {% for message in messages %}
+        <div class="alert alert-info" style="margin-bottom: 1rem;">{{ message }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
+<div class="card" style="margin-bottom: 2rem;">
+    <div class="card-header">
+        <h3>Create Account</h3>
+    </div>
+    <div class="card-body">
+        <form action="/admin/accounts/create" method="POST" style="display: flex; gap: 15px; align-items: flex-end;">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label>Username</label>
+                <input type="text" name="username" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <label>Email (optional)</label>
+                <input type="email" name="email">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <label>Role</label>
+                <select name="role">
+                    <option value="viewer">Viewer</option>
+                    <option value="operator">Operator</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Create Account</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>Users</h3>
+    </div>
+    <div class="card-body" style="overflow-x: auto;">
+        <table class="dense" style="width: 100%; text-align: left; border-collapse: collapse;">
+            <thead>
+                <tr style="border-bottom: 1px solid #333;">
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Must Ch. PW</th>
+                    <th>Created At</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr style="border-bottom: 1px solid #222;">
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.email or '—' }}</td>
+                    <td>{{ u.role }}</td>
+                    <td>
+                        {% if u.status == 'suspended' %}
+                            <span class="badge badge-danger" style="color: #ff4d6a;">Suspended</span>
+                        {% else %}
+                            <span class="badge badge-success" style="color: #00e6a0;">Active</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ 'Yes' if u.must_change_pw else 'No' }}</td>
+                    <td>{{ u.created_at }}</td>
+                    <td style="display: flex; gap: 5px; align-items: center; padding: 5px 0;">
+                        {% set is_self = current_user and current_user.id == u.id %}
+                        {% set is_last_admin = u.role == 'admin' and (users|selectattr('role', 'equalto', 'admin')|selectattr('status', 'equalto', 'active')|list|length <= 1) %}
+                        {% set disable_danger = is_self or is_last_admin %}
+                        
+                        <form action="/admin/accounts/{{ u.id }}/reset-password" method="POST" style="display:inline;">
+                            <button type="submit" class="btn btn-sm" title="Reset Password">Reset PW</button>
+                        </form>
+                        
+                        {% if u.status == 'active' %}
+                        <form action="/admin/accounts/{{ u.id }}/suspend" method="POST" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-warning" {% if disable_danger %}disabled title="Cannot suspend self or last active admin"{% endif %}>Suspend</button>
+                        </form>
+                        {% else %}
+                        <form action="/admin/accounts/{{ u.id }}/reactivate" method="POST" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-success">Reactivate</button>
+                        </form>
+                        {% endif %}
+
+                        <form action="/admin/accounts/{{ u.id }}/change-role" method="POST" style="display:inline; display:flex; gap:5px;">
+                            <select name="new_role" {% if disable_danger %}disabled title="Cannot demote self or last active admin"{% endif %} style="padding: 2px;">
+                                <option value="viewer" {% if u.role == 'viewer' %}selected{% endif %}>Viewer</option>
+                                <option value="operator" {% if u.role == 'operator' %}selected{% endif %}>Operator</option>
+                                <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>Admin</option>
+                            </select>
+                            <button type="submit" class="btn btn-sm" {% if disable_danger %}disabled{% endif %}>Change</button>
+                        </form>
+
+                        <form action="/admin/accounts/{{ u.id }}/delete" method="POST" style="display:inline;" onsubmit="return confirm('Are you sure?');">
+                            <button type="submit" class="btn btn-sm btn-danger" {% if disable_danger %}disabled title="Cannot delete self or last active admin"{% endif %}>Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

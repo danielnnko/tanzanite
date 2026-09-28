@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="display:flex; flex-direction:column; gap:12px;">
+
+    <div class="card">
+        <div class="panel-title" style="margin-bottom:2px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 7 4-14 2 7h6"/></svg>
+            Telemetry
+        </div>
+    </div>
+
+    <div class="stat-row">
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div class="stat-body"><div class="stat-label">Bus Voltage</div><div class="stat-value" id="tlm-voltage">&mdash;</div></div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/><path d="M6 10v4M10 10v4"/></svg></div>
+            <div class="stat-body"><div class="stat-label">Battery</div><div class="stat-value" id="tlm-batt">&mdash;</div></div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 00-4 0v9.5a4 4 0 104 0z"/><path d="M12 9v6"/></svg></div>
+            <div class="stat-body"><div class="stat-label">Temperature</div><div class="stat-value" id="tlm-temp">&mdash;</div></div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-icon icon-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/><path d="M22 4v16"/></svg></div>
+            <div class="stat-body"><div class="stat-label">Uplink Signal</div><div class="stat-value" id="tlm-rssi">&mdash;</div></div>
+        </div>
+    </div>
+
+    <div class="bottom-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Battery %</div><div style="height:150px;"><canvas id="chart-batt"></canvas></div></div>
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Temperature &deg;C</div><div style="height:150px;"><canvas id="chart-temp"></canvas></div></div>
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Altitude (m)</div><div style="height:150px;"><canvas id="chart-alt"></canvas></div></div>
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Range (km)</div><div style="height:150px;"><canvas id="chart-range"></canvas></div></div>
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Doppler (Hz)</div><div style="height:150px;"><canvas id="chart-doppler"></canvas></div></div>
+        <div class="card"><div class="panel-title" style="margin-bottom:10px;">Azimuth / Elevation</div><div style="height:150px;"><canvas id="chart-azel"></canvas></div></div>
+    </div>
+
+    <div class="bottom-grid" style="grid-template-columns: 1.3fr 1fr;">
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:10px;">Telemetry Log</div>
+            <div style="max-height:260px; overflow-y:auto;">
+                <table class="table data-table-sm">
+                    <thead><tr><th>Time (UTC)</th><th>Seq</th><th>Batt V</th><th>Temp &deg;C</th><th>RSSI</th></tr></thead>
+                    <tbody id="tlm-log-body">
+                        <tr><td colspan="5" class="text-muted">Waiting for telemetry&hellip;</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:10px;">Downlink Console</div>
+            <div class="console-box" id="dl-console" style="max-height:260px;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const chartOpts = { responsive: true, maintainAspectRatio: false, animation: false,
+        elements: { point: { radius: 0 } },
+        scales: { x: { display: false }, y: { ticks: { color: '#8b96b3', font: {size: 9} }, grid: { color: '#1e2a44' } } },
+        plugins: { legend: { display: false } } };
+
+    const mkChart = (id, color, label) => new Chart(document.getElementById(id), {
+        type: 'line', data: { labels: [], datasets: [{label: label, borderColor: color, data: [], tension: 0.25}] },
+        options: chartOpts
+    });
+
+    const battC = mkChart('chart-batt', '#22c55e', 'Battery %');
+    const tempC = mkChart('chart-temp', '#ef4444', 'Temp \u00b0C');
+    const altC = mkChart('chart-alt', '#3b82f6', 'Altitude m');
+    const rangeC = mkChart('chart-range', '#a855f7', 'Range km');
+    const dopplerC = mkChart('chart-doppler', '#00d4ff', 'Doppler Hz');
+    const azelC = new Chart(document.getElementById('chart-azel'), {
+        type: 'line', data: { labels: [], datasets: [
+            {label: 'Azimuth', borderColor: '#ec4899', data: [], tension: 0.25},
+            {label: 'Elevation', borderColor: '#f0a020', data: [], tension: 0.25}] },
+        options: { ...chartOpts, plugins: { legend: { display: true, labels: { color: '#8b96b3', boxWidth: 10, font: {size: 10} } } } }
+    });
+
+    function pushOne(chart, val) {
+        chart.data.labels.push('');
+        chart.data.datasets[0].data.push(val);
+        if (chart.data.labels.length > 120) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+        chart.update('none');
+    }
+    function pushTwo(chart, v1, v2) {
+        chart.data.labels.push('');
+        chart.data.datasets[0].data.push(v1);
+        chart.data.datasets[1].data.push(v2);
+        if (chart.data.labels.length > 120) { chart.data.labels.shift(); chart.data.datasets.forEach(d => d.data.shift()); }
+        chart.update('none');
+    }
+
+    const logBody = document.getElementById('tlm-log-body');
+    let logSeeded = false;
+
+    if (window.TansatStream) {
+        const f = TansatStream.fmt;
+
+        TansatStream.on('packet', (data) => {
+            if (data.type !== 'tlm') return;
+
+            document.getElementById('tlm-voltage').innerHTML = f.num(data.bus_voltage, 2) + ' V';
+            document.getElementById('tlm-batt').innerHTML = f.num(data.battery_pct, 1) + ' %';
+            document.getElementById('tlm-temp').innerHTML = f.num(data.temperature, 1) + ' &deg;C';
+            document.getElementById('tlm-rssi').innerHTML = f.num(data.rssi, 0) + ' dBm';
+
+            pushOne(battC, data.battery_pct);
+            pushOne(tempC, data.temperature);
+            pushOne(altC, data.true_altitude_m);
+            pushOne(rangeC, data.slant_km);
+            pushOne(dopplerC, data.doppler_100mhz);
+            pushTwo(azelC, data.azimuth, data.elevation);
+
+            if (!logSeeded) { logBody.innerHTML = ''; logSeeded = true; }
+            const tr = document.createElement('tr');
+            const t = new Date().toISOString().substr(11, 8);
+            tr.innerHTML = `<td class="mono">${t}</td><td class="mono">${f.num(data.seq,0)}</td><td class="mono">${f.num(data.bus_voltage,2)}</td><td class="mono">${f.num(data.temperature,1)}</td><td class="mono">${f.num(data.rssi,0)}</td>`;
+            logBody.prepend(tr);
+            while (logBody.children.length > 15) logBody.removeChild(logBody.lastChild);
+        });
+
+        TansatStream.on('raw', (data) => {
+            const c = document.getElementById('dl-console');
+            const div = document.createElement('div');
+            div.className = 'console-line rx';
+            div.textContent = `[${data.ts ? data.ts.substr(11,8) : ''}] ${data.line}`;
+            c.appendChild(div);
+            c.scrollTop = c.scrollHeight;
+        });
+
+        TansatStream.on('uplink', (data) => {
+            const c = document.getElementById('dl-console');
+            const div = document.createElement('div');
+            div.className = 'console-line ' + (data.direction === 'tx' ? 'tx' : 'ack');
+            div.textContent = `[${data.ts ? data.ts.substr(11,8) : ''}] ${data.direction === 'tx' ? 'TX' : 'RX'}: ${data.raw || ''}`;
+            c.appendChild(div);
+            c.scrollTop = c.scrollHeight;
+        });
+    }
+
+    // ── Backfill from history (envelope is {ok, packets, count}) ──
+    fetch('/api/history?limit=200').then(r => r.json()).then(resp => {
+        const packets = resp.packets || [];
+        packets.forEach(pt => {
+            if (pt.battery_pct != null) battC.data.datasets[0].data.push(pt.battery_pct);
+            if (pt.temperature != null) tempC.data.datasets[0].data.push(pt.temperature);
+            if (pt.true_altitude_m != null) altC.data.datasets[0].data.push(pt.true_altitude_m);
+            if (pt.slant_km != null) rangeC.data.datasets[0].data.push(pt.slant_km);
+            if (pt.doppler_100mhz != null) dopplerC.data.datasets[0].data.push(pt.doppler_100mhz);
+            if (pt.azimuth != null) azelC.data.datasets[0].data.push(pt.azimuth);
+            if (pt.elevation != null) azelC.data.datasets[1].data.push(pt.elevation);
+            battC.data.labels.push(''); tempC.data.labels.push(''); altC.data.labels.push('');
+            rangeC.data.labels.push(''); dopplerC.data.labels.push(''); azelC.data.labels.push('');
+        });
+        [battC, tempC, altC, rangeC, dopplerC, azelC].forEach(c => c.update());
+    }).catch(e => console.error('History backfill failed:', e));
+</script>
+{% endblock %}

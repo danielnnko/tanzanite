@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /d \"D:\\\\TANSAT\\\\Website\\\\v6\")",
+      "Bash(python run.py)",
+      "Bash(cd /d TANSAT/Website/v6)",
+      "Read(//tmp/**)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python *)",
+      "Bash(curl -s http://127.0.0.1:5000/api/status)",
+      "Bash(curl -s -L http://127.0.0.1:5000/login)",
+      "Bash(curl -s -N -H \"Accept: text/event-stream\" \"http://127.0.0.1:5000/api/stream\")",
+      "Bash(curl -s -c /tmp/cookies.txt \"http://127.0.0.1:5000/login\")",
+      "Bash(curl -s -c /tmp/cookies.txt -d \"username=admin&password=admin\" \"http://127.0.0.1:5000/login\")",
+      "Bash(curl -s -b /tmp/cookies.txt \"http://127.0.0.1:5000/api/status\")",
+      "Bash(node *)",
+      "PowerShell(cd \"D:\\\\TANSAT\\\\Website\\\\v6\"; $env:DATABASE_URL=\"postgresql://postgres:Sage1401@localhost:5432/tansat2\"; $env:SECRET_KEY=\"tansat_ground_station_secret_key_8f294a0b3c1d5e6f\"; python -c \"from app import create_app; app = create_app\\(\\); app.run\\(host='0.0.0.0', port=5000, threaded=True, use_reloader=False\\)\")",
+      "Bash(curl -s -L -b /tmp/cookies.txt -c /tmp/cookies.txt -d \"username=admin&password=admin\" \"http://127.0.0.1:5000/login\")"
+    ]
+  }
+}

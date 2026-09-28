@@ -1,0 +1,461 @@
+{% extends "base.html" %}
+
+{% block head %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<style>
+  /* ── Instrument surface (always dark, per design system §4) ─────────── */
+  .instrument-surface {
+    height: calc(100vh - 120px);
+    width: 100%;
+    position: relative;
+    background-color: #050508;
+    border: 1px solid #2a2d3d;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  #map { height: 100%; width: 100%; z-index: 1; background: #050508; }
+
+  /* ── Top-left toolbar ───────────────────────────────────────────────── */
+  .map-toolbar {
+    position: absolute; top: 12px; left: 12px; z-index: 1000;
+    display: flex; gap: 6px;
+  }
+  .map-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(15,16,21,.88); border: 1px solid #2a2d3d;
+    color: #e8e9ef; border-radius: 7px; padding: 5px 10px;
+    font-size: 11px; cursor: pointer; transition: background 120ms, border-color 120ms;
+    font-family: 'Inter', sans-serif;
+  }
+  .map-btn:hover { background: #161822; }
+  .map-btn.active { border-color: #4f7cff; color: #4f7cff; }
+  .map-btn svg { flex: 0 0 auto; }
+
+  /* ── Right info panel ───────────────────────────────────────────────── */
+  .map-overlay {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: rgba(15,16,21,.9); color: #e8e9ef;
+    padding: 14px 16px; border-radius: 10px; width: 248px;
+    border: 1px solid #2a2d3d;
+    font-family: 'Inter', sans-serif;
+  }
+  .map-overlay h5 {
+    margin: 0 0 10px 0; font-size: 10px; color: #5a5e7a;
+    text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .info-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 5px; font-size: 12px;
+  }
+  .info-row .k { color: #8b8fa8; }
+  .info-row .v {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e8e9ef;
+  }
+  .badge-live {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    padding: 2px 6px; border-radius: 4px;
+    background: rgba(0,230,160,.12); color: #00e6a0; border: 1px solid rgba(0,230,160,.35);
+  }
+  .badge-warn {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    padding: 2px 6px; border-radius: 4px;
+    background: rgba(255,176,32,.12); color: #ffb020; border: 1px solid rgba(255,176,32,.35);
+  }
+  .badge-nofix {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    padding: 2px 6px; border-radius: 4px;
+    background: rgba(255,77,106,.12); color: #ff4d6a; border: 1px solid rgba(255,77,106,.35);
+  }
+  .text-ok   { color: #00e6a0; }
+  .text-bad  { color: #ff4d6a; }
+  .text-warn { color: #ffb020; }
+  .divider { border-top: 1px solid #2a2d3d; margin: 9px 0; }
+
+  /* ── Bottom-left legend ─────────────────────────────────────────────── */
+  .map-legend {
+    position: absolute; bottom: 12px; left: 12px; z-index: 1000;
+    background: rgba(15,16,21,.88); border: 1px solid #2a2d3d;
+    border-radius: 7px; padding: 8px 12px;
+    display: flex; gap: 14px; align-items: center;
+    font-size: 10px; color: #8b8fa8; font-family: 'Inter', sans-serif;
+  }
+  .map-legend .item { display: inline-flex; align-items: center; gap: 5px; }
+  .lg-dot    { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .lg-line   { width: 16px; height: 0; border-top: 2px dashed #00e6a0; display: inline-block; }
+  .lg-track  { width: 16px; height: 0; border-top: 2px solid #4f7cff; display: inline-block; }
+
+  /* ── No-fix banner (top-center) ─────────────────────────────────────── */
+  .map-nofix {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; background: rgba(15,16,21,.9);
+    border: 1px solid rgba(255,77,106,.4); border-radius: 7px;
+    padding: 6px 14px; font-size: 11px; color: #ff4d6a;
+    font-family: 'JetBrains Mono', monospace;
+    display: none; align-items: center; gap: 8px;
+  }
+  .map-nofix.show { display: inline-flex; }
+
+  /* ── Leaflet popup theming (dark) ───────────────────────────────────── */
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: #0f1015; color: #e8e9ef; border: 1px solid #2a2d3d;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5);
+  }
+  .leaflet-popup-content-wrapper { border-radius: 8px; }
+  .leaflet-popup-content { margin: 10px 14px; font-size: 12px; line-height: 1.55; }
+  .leaflet-popup-content b { color: #fff; }
+  .leaflet-container a.leaflet-popup-close-button { color: #5a5e7a; }
+  .leaflet-bar a {
+    background: #0f1015; color: #e8e9ef; border-color: #2a2d3d;
+  }
+  .leaflet-bar a:hover { background: #161822; }
+  .leaflet-control-attribution {
+    background: rgba(15,16,21,.8) !important; color: #5a5e7a !important;
+    font-size: 9px !important;
+  }
+  .leaflet-control-attribution a { color: #8b8fa8 !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="instrument-surface">
+  <div id="map"></div>
+
+  <!-- Toolbar -->
+  <div class="map-toolbar">
+    <button class="map-btn" id="btn-fit" title="Center map on ground station">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>
+      Center GS
+    </button>
+    <button class="map-btn" id="btn-track" title="Toggle satellite ground track">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c3-6 7-6 10 0s7 6 10 0"/></svg>
+      Track
+    </button>
+    <button class="map-btn" id="btn-follow" title="Keep map centered on satellite">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L9 15"/><path d="M21 3l-7 18-3-7-7-3z"/></svg>
+      Follow SAT
+    </button>
+  </div>
+
+  <!-- No-fix banner -->
+  <div class="map-nofix" id="map-nofix">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ff4d6a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/></svg>
+    <span>AWAITING SATELLITE POSITION</span>
+  </div>
+
+  <!-- Info panel -->
+  <div class="map-overlay">
+    <h5>
+      Satellite Info
+      <span class="badge-nofix" id="badge-state">NO SIGNAL</span>
+    </h5>
+    <div class="info-row"><span class="k">Latitude</span>  <span class="v" id="info-lat">&mdash;</span></div>
+    <div class="info-row"><span class="k">Longitude</span> <span class="v" id="info-lon">&mdash;</span></div>
+    <div class="info-row"><span class="k">Altitude</span>  <span class="v" id="info-alt">&mdash;</span></div>
+    <div class="divider"></div>
+    <div class="info-row"><span class="k">Azimuth</span>   <span class="v" id="info-az">&mdash;</span></div>
+    <div class="info-row"><span class="k">Elevation</span> <span class="v" id="info-el">&mdash;</span></div>
+    <div class="info-row"><span class="k">Slant Range</span> <span class="v" id="info-range">&mdash;</span></div>
+    <div class="divider"></div>
+    <div class="info-row"><span class="k">Position Src</span> <span class="v" id="info-src">&mdash;</span></div>
+    <div class="info-row"><span class="k">Last Update</span>  <span class="v" id="info-age">&mdash;</span></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="map-legend">
+    <span class="item"><span class="lg-dot" style="background:#ffb020;"></span> Ground Station</span>
+    <span class="item"><span class="lg-dot" style="background:#ec4899;"></span> Satellite</span>
+    <span class="item"><span class="lg-line"></span> LOS Link</span>
+    <span class="item"><span class="lg-track"></span> Ground Track</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+/**
+ * map.js — TANSAT GIS Map View (CartoDB Dark Matter)
+ *
+ * Data sources (all live, all wired into the app core):
+ *   • TansatStream 'packet' events — TLM (onboard GPS) and ORB (propagator)
+ *     packets produced by the acquisition service reading the serial port.
+ *   • TansatStream 'status' events — acquisition running / port / baud.
+ *   • /api/status + /api/history — initial snapshot & position back-fill.
+ *   • gs_lat / gs_lon come from the PostgreSQL station_settings table via
+ *     the server-rendered template (pages.map_view), so admin changes in
+ *     Settings apply to this map on next page load.
+ *
+ * Fix precedence: onboard GPS (authoritative) > ORB propagator > none.
+ * A TLM packet without a fix NEVER hides an ORB-sourced position.
+ */
+(function () {
+  'use strict';
+
+  // ── Config from PostgreSQL (via template) ────────────────────────────
+  const GS_LAT = parseFloat({{ gs_lat | default(0) | tojson }});
+  const GS_LON = parseFloat({{ gs_lon | default(0) | tojson }});
+
+  // ── DOM handles ──────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  const els = {
+    lat: $('info-lat'), lon: $('info-lon'), alt: $('info-alt'),
+    az: $('info-az'), el: $('info-el'), range: $('info-range'),
+    src: $('info-src'), age: $('info-age'), state: $('badge-state'),
+    nofix: $('map-nofix'),
+  };
+
+  // ── Map init (CartoDB Dark Matter tiles) ─────────────────────────────
+  const map = L.map('map', {
+    center: [GS_LAT, GS_LON],
+    zoom: 6,
+    zoomControl: true,
+    worldCopyJump: true,          // satellite crossing ±180° wraps smoothly
+  });
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  }).addTo(map);
+
+  // ── Layers ───────────────────────────────────────────────────────────
+  // Ground station: dot + accuracy halo
+  const gsHalo = L.circleMarker([GS_LAT, GS_LON], {
+    radius: 16, color: '#ffb020', weight: 1, opacity: 0.35, fillOpacity: 0.06,
+  }).addTo(map);
+  const gsMarker = L.circleMarker([GS_LAT, GS_LON], {
+    radius: 7, color: '#ffb020', weight: 2, fillColor: '#ffb020', fillOpacity: 1,
+  }).addTo(map);
+  gsMarker.bindPopup(
+    `<b>${'{{ station_name | default("Ground Station") }}'}</b><br>` +
+    `Lat ${GS_LAT.toFixed(4)}&deg; &middot; Lon ${GS_LON.toFixed(4)}&deg;`
+  );
+
+  // Satellite: outer pulse ring + core dot
+  const satRing = L.circleMarker([0, 0], {
+    radius: 13, color: '#ec4899', weight: 1, opacity: 0.5, fillOpacity: 0.08,
+  });
+  const satMarker = L.circleMarker([0, 0], {
+    radius: 6, color: '#ec4899', weight: 2, fillColor: '#ec4899', fillOpacity: 1,
+  });
+
+  // LOS line + ground track
+  const losLine = L.polyline([], {
+    color: '#00e6a0', weight: 2, dashArray: '5,6', opacity: 0.9,
+  });
+  const groundTrack = L.polyline([], {
+    color: '#4f7cff', weight: 2, opacity: 0.85,
+  }).addTo(map);
+
+  // ── State ────────────────────────────────────────────────────────────
+  const MAX_TRACK = 400;
+  const track = [];          // [lat, lon] pairs
+  let lastFix = null;        // {lat, lon, altM, az, el, rangeKm, src, ts}
+  let followSat = false;
+  let trackVisible = true;
+  let linkLive = false;      // acquisition running?
+
+  // ── UI helpers ───────────────────────────────────────────────────────
+  function setBadge(mode) {
+    // mode: 'gps' | 'orb' | 'nogps' | 'none'
+    const b = els.state;
+    if (mode === 'gps' || mode === 'orb') {
+      b.textContent = mode === 'gps' ? 'LIVE · GPS' : 'LIVE · ORB';
+      b.className = 'badge-live';
+    } else if (mode === 'nogps') {
+      b.textContent = 'ORB POS · GPS NO-FIX';
+      b.className = 'badge-warn';
+    } else {
+      b.textContent = linkLive ? 'NO POSITION' : 'NO SIGNAL';
+      b.className = 'badge-nofix';
+    }
+  }
+
+  function setBanner(show) { els.nofix.classList.toggle('show', !!show); }
+
+  function fmtAge(ts) {
+    const s = Math.round((Date.now() - ts) / 1000);
+    return s < 60 ? s + 's ago' : Math.round(s / 60) + 'm ago';
+  }
+
+  setInterval(() => {
+    if (lastFix) els.age.textContent = fmtAge(lastFix.ts);
+  }, 1000);
+
+  // ── Fix application ──────────────────────────────────────────────────
+  function applyFix(fix) {
+    const prev = lastFix;
+    lastFix = { ...fix, ts: Date.now() };
+    const pos = [fix.lat, fix.lon];
+
+    satMarker.setLatLng(pos);
+    satRing.setLatLng(pos);
+    if (!map.hasLayer(satMarker)) { satMarker.addTo(map); satRing.addTo(map); }
+
+    // Pulse ring: gentle radius oscillation on each new fix
+    satRing.setRadius(10 + 6 * Math.abs(Math.sin(Date.now() / 600)));
+
+    // Ground track (append only if moved meaningfully — reduces noise)
+    if (!prev || Math.abs(prev.lat - fix.lat) > 1e-5 || Math.abs(prev.lon - fix.lon) > 1e-5) {
+      track.push(pos);
+      if (track.length > MAX_TRACK) track.shift();
+      if (trackVisible) groundTrack.setLatLngs(track);
+    }
+
+    // LOS line while above horizon
+    if ((fix.el || 0) > 0) {
+      losLine.setLatLngs([[GS_LAT, GS_LON], pos]);
+      if (!map.hasLayer(losLine)) losLine.addTo(map);
+    } else if (map.hasLayer(losLine)) {
+      map.removeLayer(losLine);
+    }
+
+    // Follow mode
+    if (followSat) map.panTo(pos, { animate: true, duration: 0.5 });
+
+    // Panel
+    els.lat.textContent  = fix.lat.toFixed(4) + '\u00b0';
+    els.lon.textContent  = fix.lon.toFixed(4) + '\u00b0';
+    els.alt.textContent  = fix.altM >= 1000
+      ? (fix.altM / 1000).toFixed(2) + ' km'
+      : fix.altM.toFixed(0) + ' m';
+    els.az.textContent   = (fix.az  != null ? fix.az  : 0).toFixed(1) + '\u00b0';
+    els.el.textContent   = (fix.el  != null ? fix.el  : 0).toFixed(1) + '\u00b0';
+    els.range.textContent = (fix.rangeKm != null ? fix.rangeKm : 0).toFixed(2) + ' km';
+    els.src.textContent  = fix.src === 'gps' ? 'Onboard GPS' : 'ORB Propagator';
+    els.age.textContent  = 'just now';
+
+    setBanner(false);
+    setBadge(fix.src === 'gps' ? 'gps' : (mode() === 'nogps-orb' ? 'orb' : fix.src));
+  }
+
+  // Simple state model for badge/banners
+  function mode() {
+    if (!lastFix) return 'none';
+    if (lastFix.src === 'gps') return 'gps';
+    return gpsSeenSinceOrb ? 'nogps-orb' : 'orb';
+  }
+  let gpsSeenSinceOrb = false;
+
+  function clearFix() {
+    lastFix = null;
+    track.length = 0;
+    groundTrack.setLatLngs([]);
+    [satMarker, satRing, losLine].forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+    ['lat','lon','alt','az','el','range','src','age'].forEach(k => {
+      els[k].textContent = '\u2014';
+    });
+    els.alt.textContent = '\u2014';
+    setBanner(true);
+    setBadge('none');
+  }
+
+  // ── Packet routing ───────────────────────────────────────────────────
+  function handlePacket(pkt) {
+    if (!pkt) return;
+    const ptype = (pkt.type || '').toUpperCase();
+
+    // ORB propagator fix (parser already normalized fields server-side)
+    if (ptype === 'ORB') {
+      if (pkt.gps_lock && pkt.latitude != null && pkt.longitude != null) {
+        applyFix({
+          lat: pkt.latitude, lon: pkt.longitude,
+          altM: pkt.true_altitude_m || 0,
+          az: pkt.azimuth, el: pkt.elevation,
+          rangeKm: pkt.slant_km, src: 'orb',
+        });
+      }
+      return;
+    }
+    if (ptype !== 'tlm') return;
+
+    if (pkt.gps_lock && pkt.latitude != null && pkt.longitude != null) {
+      gpsSeenSinceOrb = false;
+      applyFix({
+        lat: pkt.latitude, lon: pkt.longitude,
+        altM: pkt.true_altitude_m || 0,
+        az: pkt.azimuth, el: pkt.elevation,
+        rangeKm: pkt.slant_km, src: 'gps',
+      });
+    } else {
+      // Onboard GPS lost fix:
+      gpsSeenSinceOrb = true;
+      if (lastFix && lastFix.src === 'orb') {
+        // Keep the propagator position visible; show honest GPS state
+        setBadge('nogps');
+        els.src.textContent = 'ORB Propagator';
+      } else {
+        clearFix();
+      }
+    }
+  }
+
+  // ── Acquisition status → link badge + banner ────────────────────────
+  function updateStatus(st) {
+    linkLive = !!(st && st.acquisition_running && st.port);
+    if (!lastFix) setBadge('none');
+  }
+
+  // ── Toolbar actions ──────────────────────────────────────────────────
+  $('btn-fit').addEventListener('click', () => {
+    if (lastFix) {
+      map.fitBounds(L.latLngBounds([lastFix.lat, lastFix.lon], [GS_LAT, GS_LON]),
+                    { padding: [60, 60], maxZoom: 10 });
+    } else {
+      map.setView([GS_LAT, GS_LON], 6);
+    }
+  });
+
+  const btnTrack = $('btn-track');
+  btnTrack.classList.add('active');           // track shown by default
+  btnTrack.addEventListener('click', () => {
+    trackVisible = !trackVisible;
+    btnTrack.classList.toggle('active', trackVisible);
+    if (trackVisible) {
+      groundTrack.setLatLngs(track);
+      groundTrack.addTo(map);
+    } else {
+      map.removeLayer(groundTrack);
+    }
+  });
+
+  const btnFollow = $('btn-follow');
+  btnFollow.addEventListener('click', () => {
+    followSat = !followSat;
+    btnFollow.classList.toggle('active', followSat);
+    if (followSat && lastFix) map.panTo([lastFix.lat, lastFix.lon]);
+  });
+
+  // ── Wiring: initial snapshot + live stream ───────────────────────────
+  fetch('/api/status').then(r => r.json()).then(updateStatus).catch(() => {});
+
+  fetch('/api/history?limit=300')
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.ok && Array.isArray(res.packets)) {
+        res.packets.forEach(handlePacket);
+        // First paint: frame both GS and SAT if we have a fix
+        if (lastFix) {
+          setBanner(false);
+        } else {
+          setBanner(true);
+          setBadge('none');
+        }
+      }
+    })
+    .catch(() => { setBanner(true); });
+
+  if (window.TansatStream) {
+    TansatStream.on('packet', handlePacket);
+    TansatStream.on('status', updateStatus);
+  }
+
+  // Sanity log (helps ops diagnose blank-map reports)
+  console.log('[TANSAT Map] init — GS:', GS_LAT, GS_LON,
+              '| stream:', !!window.TansatStream);
+})();
+</script>
+{% endblock %}

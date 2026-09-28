@@ -1,0 +1,368 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header">
+    <h1>Attitude View</h1>
+</div>
+
+<div class="grid" style="grid-template-columns: 1fr;">
+    <div class="card">
+        <div class="card-header">
+            <h3>3D Spacecraft Orientation</h3>
+        </div>
+        <div class="instrument-surface" id="attitude-scene" style="width: 100%; height: 520px; position: relative; background:#050508; border-radius:10px; overflow:hidden;">
+            <!-- COM18 link badge (top-left) -->
+            <div id="link-badge" style="position:absolute; top:12px; left:12px; z-index:10; background:rgba(15,16,21,.85); border:1px solid #2a2d3d; border-radius:7px; padding:5px 10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#8b8fa8;">
+                PORT — · IDLE
+            </div>
+            <!-- Packet age badge (top-right) -->
+            <div id="packet-badge" style="position:absolute; top:12px; right:12px; z-index:10; background:rgba(15,16,21,.85); border:1px solid #2a2d3d; border-radius:7px; padding:5px 10px; font-family:'JetBrains Mono',monospace; font-size:11px; color:#8b8fa8;">
+                last packet: —
+            </div>
+            <!-- Hint (bottom-left) -->
+            <div style="position:absolute; bottom:12px; left:12px; z-index:10; font-family:'JetBrains Mono',monospace; font-size:10px; color:#5a5e7a;">
+                drag = orbit · wheel = zoom · model follows live COM18 attitude
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid" style="grid-template-columns: repeat(3, 1fr);">
+    <div class="card">
+        <div class="card-header"><h3>Pitch (°)</h3></div>
+        <div class="tlm-value" id="tlm-pitch" style="color: #ff4d6a; font-family: monospace; font-size: 2em;">&mdash;</div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>Roll (°)</h3></div>
+        <div class="tlm-value" id="tlm-roll" style="color: #00e6a0; font-family: monospace; font-size: 2em;">&mdash;</div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>Yaw (°)</h3></div>
+        <div class="tlm-value" id="tlm-yaw" style="color: #4f7cff; font-family: monospace; font-size: 2em;">&mdash;</div>
+    </div>
+</div>
+
+<div class="grid" style="grid-template-columns: repeat(3, 1fr);">
+    <div class="card">
+        <div class="card-header"><h3>ω_x (°/s)</h3></div>
+        <div class="tlm-value" id="tlm-wx" style="font-family: monospace;">&mdash;</div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>ω_y (°/s)</h3></div>
+        <div class="tlm-value" id="tlm-wy" style="font-family: monospace;">&mdash;</div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>ω_z (°/s)</h3></div>
+        <div class="tlm-value" id="tlm-wz" style="font-family: monospace;">&mdash;</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/**
+ * attitude.js — TANSAT 3D Attitude View
+ *
+ * Data source: the app-wide TansatStream SSE client (stream.js, loaded by
+ * base.html) which is fed by the acquisition service reading the serial port
+ * (e.g. COM18) via /api/stream. This page must NOT open its own EventSource.
+ *
+ * Model: 1U CubeSat (10×10×10 cm, scaled ×2) — anodized frame, 4 corner
+ * rails, body-mounted solar cells, whip antenna, camera lens, TANSAT label.
+ * Orientation: telemetry pitch/roll/yaw from the server-side complementary
+ * filter, applied via quaternion slerp so motion is smooth between packets.
+ */
+(function () {
+    'use strict';
+
+    const container = document.getElementById('attitude-scene');
+    const linkBadge    = document.getElementById('link-badge');
+    const packetBadge  = document.getElementById('packet-badge');
+
+    // ── Scene ────────────────────────────────────────────────────────
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    container.appendChild(renderer.domElement);
+
+    // ── Lighting ─────────────────────────────────────────────────────
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+    sun.position.set(5, 10, 7.5);
+    scene.add(sun);
+    const rim = new THREE.PointLight(0x4f7cff, 0.5, 40);
+    rim.position.set(-6, -3, -5);
+    scene.add(rim);
+
+    // ── CubeSat body (1U, 10 cm → 2 scene units) ─────────────────────
+    // Face materials order: +x, -x, +y, -y, +z, -z
+    const FRAME = '#0b0d13';        // anodized aluminum frame
+    const CELL  = '#122a6e';        // triple-junction solar cell blue
+    const GAP   = '#3a4664';        // cell spacing / bus bars
+
+    function makeFaceTexture(withLabel) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = FRAME; ctx.fillRect(0, 0, 256, 256);
+        // 3×3 solar cell grid with frame gaps
+        const m = 22, gap = 6;                       // margin & gap px
+        const cell = (256 - 2 * m - 2 * gap) / 3;
+        for (let r = 0; r < 3; r++) {
+            for (let col = 0; col < 3; col++) {
+                const x = m + col * (cell + gap), y = m + r * (cell + gap);
+                const g = ctx.createLinearGradient(x, y, x + cell, y + cell);
+                g.addColorStop(0, CELL); g.addColorStop(1, '#0a1740');
+                ctx.fillStyle = g;
+                ctx.fillRect(x, y, cell, cell);
+                ctx.strokeStyle = GAP; ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, cell, cell);
+                // thin busbar fingers
+                ctx.strokeStyle = 'rgba(200,210,235,0.35)'; ctx.lineWidth = 1;
+                for (let b = 1; b <= 2; b++) {
+                    ctx.beginPath();
+                    ctx.moveTo(x + (cell * b) / 3, y + 2);
+                    ctx.lineTo(x + (cell * b) / 3, y + cell - 2);
+                    ctx.stroke();
+                }
+            }
+        }
+        if (withLabel) {
+            ctx.fillStyle = '#e8e9ef';
+            ctx.font = 'bold 34px Inter, Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('TANSAT', 128, 244);
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.anisotropy = 4;
+        return tex;
+    }
+
+    function makePayloadTexture() {
+        // Payload face: 2×2 cell grid + camera lens aperture
+        const c = document.createElement('canvas');
+        c.width = c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = FRAME; ctx.fillRect(0, 0, 256, 256);
+        const cells = [[26, 26], [166, 26], [26, 166], [166, 166]];
+        cells.forEach(([x, y]) => {
+            const g = ctx.createLinearGradient(x, y, x + 64, y + 64);
+            g.addColorStop(0, CELL); g.addColorStop(1, '#0a1740');
+            ctx.fillStyle = g; ctx.fillRect(x, y, 64, 64);
+            ctx.strokeStyle = GAP; ctx.lineWidth = 2; ctx.strokeRect(x, y, 64, 64);
+        });
+        // lens
+        ctx.beginPath(); ctx.arc(128, 128, 46, 0, Math.PI * 2);
+        ctx.fillStyle = '#05070c'; ctx.fill();
+        ctx.lineWidth = 5; ctx.strokeStyle = '#9aa0ab'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(118, 118, 12, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(160,190,255,0.45)'; ctx.fill(); // glass reflection
+        const tex = new THREE.CanvasTexture(c);
+        tex.anisotropy = 4;
+        return tex;
+    }
+
+    const faceSolar  = new THREE.MeshPhongMaterial({ map: makeFaceTexture(false), shininess: 22 });
+    const faceLabel  = new THREE.MeshPhongMaterial({ map: makeFaceTexture(true),  shininess: 22 });
+    const facePay    = new THREE.MeshPhongMaterial({ map: makePayloadTexture(),   shininess: 30 });
+    const faceBottom = new THREE.MeshPhongMaterial({ color: 0x131722, shininess: 10 }); // deploy-switch plate
+
+    const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(2, 2, 2),
+        [faceSolar, faceSolar, faceSolar, faceBottom, facePay, faceLabel] // +x -x +y -y +z -z
+    );
+    scene.add(cube);
+
+    // Edge highlight
+    const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(cube.geometry),
+        new THREE.LineBasicMaterial({ color: 0x3a4664 })
+    );
+    cube.add(edges);
+
+    // ── Corner rails (CubeSat standard: 4 rails along the long axis) ──
+    const railMat = new THREE.MeshPhongMaterial({ color: 0x9aa0ab, shininess: 60 });
+    const railGeo = new THREE.BoxGeometry(0.14, 2.1, 0.14);
+    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([sx, sz]) => {
+        const rail = new THREE.Mesh(railGeo, railMat);
+        rail.position.set(sx * 0.96, 0, sz * 0.96);
+        cube.add(rail);
+    });
+
+    // ── Deployed whip antenna (+Y) ────────────────────────────────────
+    const antMat = new THREE.MeshPhongMaterial({ color: 0xc8ccd2, shininess: 80 });
+    const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.5, 8), antMat);
+    antenna.position.y = 1.0 + 0.75;           // stub + wire above the top face
+    cube.add(antenna);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), antMat);
+    tip.position.y = 1.0 + 1.5;
+    cube.add(tip);
+    const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.1, 8), railMat);
+    stub.position.y = 1.05;
+    cube.add(stub);
+
+    // ── Body-frame axis triads (pitch=X, roll=Y, yaw=Z colors) ───────
+    const AXIS_LEN = 1.8;
+    cube.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), AXIS_LEN, 0xff4d6a, 0.18, 0.09));
+    cube.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), AXIS_LEN, 0x00e6a0, 0.18, 0.09));
+    cube.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), AXIS_LEN, 0x4f7cff, 0.18, 0.09));
+
+    // ── Reference grid floor ─────────────────────────────────────────
+    const grid = new THREE.GridHelper(9, 18, 0x2a2d3d, 0x171a24);
+    grid.position.y = -2.4;
+    scene.add(grid);
+
+    // ── Minimal orbit controls (drag + wheel; no extra CDN needed) ───
+    const target = { theta: 0.6, phi: 1.25, r: 7 };     // desired spherical
+    const current = { ...target };
+    let dragging = false, lastX = 0, lastY = 0;
+
+    renderer.domElement.addEventListener('pointerdown', e => {
+        dragging = true; lastX = e.clientX; lastY = e.clientY;
+        renderer.domElement.setPointerCapture(e.pointerId);
+    });
+    renderer.domElement.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        target.theta -= (e.clientX - lastX) * 0.008;
+        target.phi   -= (e.clientY - lastY) * 0.008;
+        target.phi = Math.max(0.15, Math.min(Math.PI - 0.15, target.phi));
+        lastX = e.clientX; lastY = e.clientY;
+    });
+    renderer.domElement.addEventListener('pointerup', () => { dragging = false; });
+    renderer.domElement.addEventListener('wheel', e => {
+        e.preventDefault();
+        target.r = Math.max(3.2, Math.min(18, target.r + e.deltaY * 0.01));
+    }, { passive: false });
+
+    // ── Telemetry → attitude ─────────────────────────────────────────
+    const D2R = Math.PI / 180;
+    const targetQuat = new THREE.Quaternion();      // where the model should go
+    let hasAttitude = false;
+    let lastPacketTs = 0;
+
+    function applyAttitude(pitchDeg, rollDeg, yawDeg) {
+        // Axis mapping (same convention as the server-side attitude filter):
+        //   pitch about X · yaw about Y in the previous view; we keep the
+        //   flight-hardware convention here: X=pitch, Y=yaw, Z=roll.
+        targetQuat.setFromEuler(new THREE.Euler(pitchDeg * D2R, yawDeg * D2R, rollDeg * D2R, 'XYZ'));
+        hasAttitude = true;
+    }
+
+    function setReadout(id, v, decimals = 1) {
+        const el = document.getElementById(id);
+        el.textContent = (v === null || v === undefined) ? '—' : Number(v).toFixed(decimals);
+    }
+
+    function handlePacket(pkt) {
+        if (!pkt || pkt.type !== 'tlm') return;
+        lastPacketTs = Date.now();
+
+        if (pkt.pitch !== undefined && pkt.roll !== undefined && pkt.yaw !== undefined) {
+            applyAttitude(pkt.pitch, pkt.roll, pkt.yaw);
+            setReadout('tlm-pitch', pkt.pitch);
+            setReadout('tlm-roll',  pkt.roll);
+            setReadout('tlm-yaw',   pkt.yaw);
+        }
+        // Gyro rates: parser field names are gyro_x/gyro_y/gyro_z (°/s)
+        setReadout('tlm-wx', pkt.gyro_x, 2);
+        setReadout('tlm-wy', pkt.gyro_y, 2);
+        setReadout('tlm-wz', pkt.gyro_z, 2);
+    }
+
+    // ── COM18 link status (from the acquisition service) ─────────────
+    function updateLinkStatus(st) {
+        if (st && st.acquisition_running && st.port) {
+            linkBadge.textContent = `PORT ${String(st.port).toUpperCase()} · ${st.baud} baud · LIVE`;
+            linkBadge.style.color = '#00e6a0';
+            linkBadge.style.borderColor = '#1d4a3a';
+        } else {
+            linkBadge.textContent = 'PORT — · NO SIGNAL';
+            linkBadge.style.color = '#ff4d6a';
+            linkBadge.style.borderColor = '#4a1d26';
+        }
+    }
+
+    // Back-fill last known attitude + link state on page load
+    fetch('/api/status').then(r => r.json()).then(updateLinkStatus).catch(() => {});
+    fetch('/api/history?limit=1').then(r => r.json()).then(res => {
+        if (res && res.ok && res.packets && res.packets.length) {
+            const p = res.packets[res.packets.length - 1];
+            if (p.type === 'tlm') handlePacket(p);
+        }
+    }).catch(() => {});
+
+    if (window.TansatStream) {
+        TansatStream.on('packet', handlePacket);
+        TansatStream.on('status', updateLinkStatus);
+    }
+
+    // Packet-age watchdog
+    setInterval(() => {
+        if (!lastPacketTs) { packetBadge.textContent = 'last packet: —'; return; }
+        const age = (Date.now() - lastPacketTs) / 1000;
+        packetBadge.textContent = `last packet: ${age.toFixed(1)}s ago`;
+        if (age > 10) {
+            packetBadge.style.color = '#ffb020';
+            packetBadge.style.borderColor = '#4a3a1d';
+        } else {
+            packetBadge.style.color = '#8b8fa8';
+            packetBadge.style.borderColor = '#2a2d3d';
+        }
+    }, 1000);
+
+    // ── Render loop ──────────────────────────────────────────────────
+    let disposed = false;
+    function animate() {
+        if (disposed) return;
+        requestAnimationFrame(animate);
+
+        // Damped camera orbit
+        current.theta += (target.theta - current.theta) * 0.12;
+        current.phi   += (target.phi   - current.phi)   * 0.12;
+        current.r     += (target.r     - current.r)     * 0.12;
+        camera.position.set(
+            current.r * Math.sin(current.phi) * Math.sin(current.theta),
+            current.r * Math.cos(current.phi),
+            current.r * Math.sin(current.phi) * Math.cos(current.theta)
+        );
+        camera.lookAt(0, 0, 0);
+
+        // Smoothly drive the model toward the latest telemetry attitude
+        if (hasAttitude) cube.quaternion.slerp(targetQuat, 0.15);
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // ── Resize ───────────────────────────────────────────────────────
+    function onResize() {
+        if (!container.clientWidth) return;
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+    window.addEventListener('resize', onResize);
+
+    // ── Cleanup (no WebGL context leak) ─────────────────────────────
+    function dispose() {
+        if (disposed) return;
+        disposed = true;
+        window.removeEventListener('resize', onResize);
+        scene.traverse(obj => {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                (Array.isArray(obj.material) ? obj.material : [obj.material]).forEach(m => {
+                    if (m.map) m.map.dispose();
+                    m.dispose();
+                });
+            }
+        });
+        renderer.dispose();
+    }
+    window.addEventListener('beforeunload', dispose);
+    window.addEventListener('pagehide', dispose);
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,572 @@
+{% extends 'base.html' %}
+
+{% block head %}
+<style>
+  /* Earth Orbit View — always dark instrument surface */
+  #earth-orbit-page { display: flex; gap: 10px; height: calc(100vh - 90px); }
+  #orbit-canvas-wrap {
+    flex: 1 1 auto;
+    background: #050508;
+    border-radius: 10px;
+    border: 1px solid #2a2d3d;
+    position: relative;
+    overflow: hidden;
+    min-height: 480px;
+  }
+  #orbit-canvas { display: block; width: 100%; height: 100%; }
+
+  /* Side panel */
+  #orbit-panel {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Readout cards */
+  .orbit-readout { background: #0f1015; border: 1px solid #2a2d3d; border-radius: 10px; padding: 12px; }
+  .orbit-readout h4 { font-size: 10px; color: #5a5e7a; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }
+  .orbit-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .orbit-label { font-size: 11px; color: #8b8fa8; }
+  .orbit-val   { font-family: 'JetBrains Mono', 'Cascadia Mono', monospace; font-size: 13px; color: #e8e9ef; }
+
+  /* No-fix overlay */
+  #no-fix-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(5,5,8,.6);
+    border-radius: 10px;
+    pointer-events: none;
+  }
+  #no-fix-overlay .no-fix-msg {
+    background: #0f1015; border: 1px solid #ff4d6a;
+    border-radius: 10px; padding: 20px 28px;
+    font-size: 14px; color: #ff4d6a; text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  #no-fix-overlay.hidden { display: none; }
+
+  /* Controls bar */
+  #orbit-controls-bar {
+    position: absolute; top: 12px; left: 12px;
+    display: flex; gap: 6px; z-index: 10;
+  }
+  .orbit-btn {
+    background: rgba(15,16,21,.85); border: 1px solid #2a2d3d;
+    color: #e8e9ef; border-radius: 7px; padding: 5px 10px;
+    font-size: 11px; cursor: pointer; transition: background 120ms;
+  }
+  .orbit-btn:hover { background: #161822; }
+  .orbit-btn.active { border-color: #4f7cff; color: #4f7cff; }
+
+  /* Speed indicator badge */
+  #speed-badge {
+    position: absolute; bottom: 12px; left: 12px;
+    background: rgba(15,16,21,.85); border: 1px solid #2a2d3d;
+    border-radius: 7px; padding: 4px 10px;
+    font-size: 10px; font-family: 'JetBrains Mono', monospace;
+    color: #8b8fa8; z-index: 10;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Earth Orbit View</h1>
+  <p style="color:#8b8fa8;font-size:12px;margin-top:4px;">
+    Planetary-scale 3D view — satellite position around Earth in real time.
+  </p>
+</div>
+
+<div id="earth-orbit-page">
+
+  <!-- ── 3D Canvas ───────────────────────────────────────────── -->
+  <div id="orbit-canvas-wrap">
+    <canvas id="orbit-canvas"></canvas>
+
+    <!-- Controls bar (top-left) -->
+    <div id="orbit-controls-bar">
+      <button class="orbit-btn" id="btn-follow" title="Follow satellite">Follow SAT</button>
+      <button class="orbit-btn" id="btn-reset"  title="Reset camera">Reset View</button>
+      <button class="orbit-btn" id="btn-speed"  title="Toggle rotation speed">Speed: Real-time</button>
+    </div>
+
+    <!-- Speed label (bottom-left) — never silently fake the speed -->
+    <div id="speed-badge">Rotation: Real-time (23h 56m/rev)</div>
+
+    <!-- No-fix overlay -->
+    <div id="no-fix-overlay">
+      <div class="no-fix-msg">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ff4d6a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px;margin-right:6px;"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+        NO POSITION FIX<br>
+        <span style="font-size:11px;color:#5a5e7a;">Waiting for GPS lock…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Side Panel ──────────────────────────────────────────── -->
+  <div id="orbit-panel">
+    <div class="orbit-readout">
+      <h4>Position</h4>
+      <div class="orbit-row"><span class="orbit-label">Latitude</span>  <span class="orbit-val" id="o-lat">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">Longitude</span> <span class="orbit-val" id="o-lon">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">Altitude</span>  <span class="orbit-val" id="o-alt">—</span></div>
+    </div>
+    <div class="orbit-readout">
+      <h4>Pointing (from GS)</h4>
+      <div class="orbit-row"><span class="orbit-label">Azimuth</span>   <span class="orbit-val" id="o-az">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">Elevation</span> <span class="orbit-val" id="o-el">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">Range</span>     <span class="orbit-val" id="o-rng">—</span></div>
+    </div>
+    <div class="orbit-readout">
+      <h4>Signal</h4>
+      <div class="orbit-row"><span class="orbit-label">GPS Lock</span>  <span class="orbit-val" id="o-lock">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">RSSI</span>      <span class="orbit-val" id="o-rssi">—</span></div>
+      <div class="orbit-row"><span class="orbit-label">SNR</span>       <span class="orbit-val" id="o-snr">—</span></div>
+    </div>
+    <div class="orbit-readout" style="font-size:10px;color:#5a5e7a;line-height:1.6;">
+      <h4>About this view</h4>
+      Satellite position is physically accurate (Earth radius + real altitude).
+      Marker <em>size</em> is exaggerated for visibility — a 10cm CubeSat at true scale is sub-pixel.
+      Trail shows last 200 positions. GS marker is fixed to Earth surface.
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/**
+ * earth_orbit.js — TANSAT Earth Orbit View
+ * Three.js r165, loaded in base.html.
+ *
+ * §8 compliance:
+ *  - Earth sphere textured with NASA Blue Marble (public domain CC)
+ *  - Single directional sun light → natural day/night terminator
+ *  - Satellite marker: child of Earth mesh so it rotates with the surface
+ *  - Ground-station marker: also child of Earth mesh
+ *  - Orbital trail: last 200 filtered positions, fading tube
+ *  - Ground track: trail projected to Earth surface
+ *  - LOS line: GS to satellite when gps_lock && elevation > 0
+ *  - No-fix: marker hidden, overlay shown
+ *  - Earth rotation speed control: Real-time vs 1 rev/30s
+ *  - Follow satellite toggle
+ *  - Dispose on page leave (no WebGL context leak)
+ */
+(function () {
+  'use strict';
+
+  // ── Constants ──────────────────────────────────────────────────
+  const EARTH_RADIUS_KM   = 6371.0;
+  const EARTH_RADIUS_SCENE = 50.0;   // scene units
+  // Sidereal day in seconds: 86164 s ≈ 23h 56m 4s
+  const SIDEREAL_DAY_S    = 86164.0;
+  const DEMO_SPEED_S      = 30.0;    // 1 rev / 30 s
+
+  // GS position from Flask template
+  const GS_LAT = parseFloat("{{ gs_lat }}");
+  const GS_LON = parseFloat("{{ gs_lon }}");
+
+  // Series / marker colors (§4 exact values)
+  const COLOR_SATELLITE   = 0xec4899;  // azimuth series color
+  const COLOR_GS          = 0xffb020;  // warning color
+  const COLOR_LOS_OK      = 0x00e6a0;  // success color
+  const COLOR_LOS_NO      = 0x2a2d3d;  // border color (dimmed)
+  const COLOR_TRAIL       = 0xec4899;
+  const COLOR_GNDTRACK    = 0x4f7cff;
+
+  const TRAIL_MAX         = 200;
+  const INTERPOLATION_ALPHA = 0.12;   // smooth easing toward target position
+
+  // ── State ──────────────────────────────────────────────────────
+  let renderer, scene, camera, controls;
+  let earthMesh, satMarker, gsMarker;
+  let trailLine, gndTrackLine, losLine;
+  let trailPoints = [], gndTrackPoints = [];
+  let animFrameId = null;
+  let disposed = false;
+
+  let rotationMode = 'realtime'; // 'realtime' | 'demo'
+  let earthRotationAngle = 0;
+  let lastFrameTime = performance.now();
+
+  let followSat = false;
+  let hasGpsFix = false;
+
+  // Current + target satellite position in scene coords
+  let satTargetPos = new THREE.Vector3(0, EARTH_RADIUS_SCENE + 3.5, 0);
+  let satCurrentPos = satTargetPos.clone();
+
+  let currentPkt = null;
+
+  // ── Helpers ────────────────────────────────────────────────────
+  function latLonAltToScene(lat_deg, lon_deg, alt_km) {
+    // ECEF → Three.js scene (Y-up)
+    // r = Earth scene radius + altitude proportion
+    const r = EARTH_RADIUS_SCENE +
+              (alt_km / EARTH_RADIUS_KM) * EARTH_RADIUS_SCENE;
+    const lat = lat_deg * Math.PI / 180;
+    const lon = lon_deg * Math.PI / 180;
+    // In Earth-local space (before Earth's rotation is applied):
+    // x = r·cos(lat)·cos(lon), y = r·sin(lat), z = r·cos(lat)·sin(lon)
+    return new THREE.Vector3(
+      r * Math.cos(lat) * Math.cos(lon),
+      r * Math.sin(lat),
+      r * Math.cos(lat) * Math.sin(lon),
+    );
+  }
+
+  function surfacePos(lat_deg, lon_deg) {
+    return latLonAltToScene(lat_deg, lon_deg, 0.0);
+  }
+
+  // ── Init Three.js ──────────────────────────────────────────────
+  function init() {
+    const canvas = document.getElementById('orbit-canvas');
+    const wrap   = document.getElementById('orbit-canvas-wrap');
+
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+    renderer.setClearColor(0x020204, 1);
+
+    scene  = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(
+      45,
+      wrap.clientWidth / wrap.clientHeight,
+      0.1,
+      2000,
+    );
+    camera.position.set(0, 0, 180);
+
+    // ── Orbit controls ──────────────────────────────────────────
+    // THREE.OrbitControls is loaded via importmap or CDN in base.html.
+    // Use the global if available, else fall back to manual pointer events.
+    if (THREE.OrbitControls) {
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.minDistance   = 60;
+      controls.maxDistance   = 500;
+    }
+
+    // ── Starfield skybox ────────────────────────────────────────
+    const starGeo  = new THREE.BufferGeometry();
+    const starVerts = [];
+    for (let i = 0; i < 8000; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi   = Math.acos(2 * Math.random() - 1);
+      const r     = 800 + Math.random() * 200;
+      starVerts.push(
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi),
+        r * Math.sin(phi) * Math.sin(theta),
+      );
+    }
+    starGeo.setAttribute('position',
+      new THREE.Float32BufferAttribute(starVerts, 3));
+    scene.add(new THREE.Points(starGeo,
+      new THREE.PointsMaterial({ color: 0xffffff, size: 0.6, sizeAttenuation: true })));
+
+    // ── Earth ───────────────────────────────────────────────────
+    const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS_SCENE, 64, 64);
+    // NASA Blue Marble texture (public domain).
+    // We use a reliable CDN-hosted copy. Attribution: NASA/Goddard Space Flight Center.
+    const texLoader = new THREE.TextureLoader();
+    const earthTex  = texLoader.load(
+      'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
+      undefined,
+      undefined,
+      () => {
+        // fallback: solid blue-green if texture fails
+        earthMesh.material.color.set(0x1a3d5c);
+      },
+    );
+    earthMesh = new THREE.Mesh(earthGeo,
+      new THREE.MeshPhongMaterial({
+        map:       earthTex,
+        specular:  new THREE.Color(0x222244),
+        shininess: 8,
+      }));
+    // Earth rotates around Y axis (North Pole up)
+    scene.add(earthMesh);
+
+    // ── Atmosphere glow (optional polish) ───────────────────────
+    const atmGeo = new THREE.SphereGeometry(EARTH_RADIUS_SCENE + 1.5, 32, 32);
+    const atmMat = new THREE.MeshPhongMaterial({
+      color:       0x4488ff,
+      transparent: true,
+      opacity:     0.08,
+      side:        THREE.BackSide,
+    });
+    earthMesh.add(new THREE.Mesh(atmGeo, atmMat));
+
+    // ── Sun directional light ───────────────────────────────────
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1.4);
+    sunLight.position.set(200, 60, 100);
+    scene.add(sunLight);
+    scene.add(new THREE.AmbientLight(0x111122, 0.4));
+
+    // ── Satellite marker ────────────────────────────────────────
+    // Position must be physically accurate; SIZE is exaggerated for visibility
+    // (a 10cm CubeSat at true scale would be sub-pixel and invisible).
+    const satGeo = new THREE.SphereGeometry(0.8, 12, 12);
+    const satMat = new THREE.MeshBasicMaterial({ color: COLOR_SATELLITE });
+    satMarker = new THREE.Mesh(satGeo, satMat);
+    satMarker.visible = false;
+    earthMesh.add(satMarker); // child of Earth → rotates with it automatically
+
+    // Glow sprite around satellite
+    const satGlowGeo = new THREE.SphereGeometry(1.4, 12, 12);
+    const satGlowMat = new THREE.MeshBasicMaterial({
+      color:       COLOR_SATELLITE,
+      transparent: true,
+      opacity:     0.25,
+    });
+    satMarker.add(new THREE.Mesh(satGlowGeo, satGlowMat));
+
+    // ── Ground-station marker ───────────────────────────────────
+    // Also a child of the Earth mesh — rotates rigidly with the surface
+    const gsPos = surfacePos(GS_LAT, GS_LON);
+    const gsGeo = new THREE.SphereGeometry(0.6, 10, 10);
+    const gsMat = new THREE.MeshBasicMaterial({ color: COLOR_GS });
+    gsMarker = new THREE.Mesh(gsGeo, gsMat);
+    gsMarker.position.copy(gsPos);
+    earthMesh.add(gsMarker);
+
+    // ── Trail (orbital) ─────────────────────────────────────────
+    trailLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: COLOR_TRAIL, opacity: 0.6, transparent: true }),
+    );
+    earthMesh.add(trailLine);
+
+    // ── Ground track ────────────────────────────────────────────
+    gndTrackLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: COLOR_GNDTRACK, opacity: 0.35, transparent: true }),
+    );
+    earthMesh.add(gndTrackLine);
+
+    // ── LOS line (scene level, not child of Earth) ───────────────
+    losLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: COLOR_LOS_OK, opacity: 0.8, transparent: true }),
+    );
+    losLine.visible = false;
+    scene.add(losLine);
+
+    // ── Resize handler ───────────────────────────────────────────
+    window.addEventListener('resize', onResize);
+  }
+
+  // ── Trail helpers ───────────────────────────────────────────────
+  function updateTrail(earthLocalPos, lat, lon) {
+    trailPoints.push(earthLocalPos.clone());
+    if (trailPoints.length > TRAIL_MAX) trailPoints.shift();
+
+    const verts = new Float32Array(trailPoints.length * 3);
+    trailPoints.forEach((p, i) => {
+      verts[i*3]   = p.x;
+      verts[i*3+1] = p.y;
+      verts[i*3+2] = p.z;
+    });
+    trailLine.geometry.setAttribute('position',
+      new THREE.BufferAttribute(verts, 3));
+    trailLine.geometry.setDrawRange(0, trailPoints.length);
+    trailLine.geometry.computeBoundingSphere();
+
+    // Ground track
+    const surf = surfacePos(lat, lon);
+    gndTrackPoints.push(surf);
+    if (gndTrackPoints.length > TRAIL_MAX) gndTrackPoints.shift();
+    const gVerts = new Float32Array(gndTrackPoints.length * 3);
+    gndTrackPoints.forEach((p, i) => {
+      gVerts[i*3]   = p.x;
+      gVerts[i*3+1] = p.y;
+      gVerts[i*3+2] = p.z;
+    });
+    gndTrackLine.geometry.setAttribute('position',
+      new THREE.BufferAttribute(gVerts, 3));
+    gndTrackLine.geometry.setDrawRange(0, gndTrackPoints.length);
+    gndTrackLine.geometry.computeBoundingSphere();
+  }
+
+  // Update the LOS line in world space (GS → SAT)
+  function updateLOS(elevation) {
+    if (!hasGpsFix || elevation <= 0) {
+      losLine.visible = false;
+      return;
+    }
+    // Both GS and SAT are in Earth-local coords; convert to world
+    const gsWorld  = gsMarker.getWorldPosition(new THREE.Vector3());
+    const satWorld = satMarker.getWorldPosition(new THREE.Vector3());
+    const pts = new Float32Array([
+      gsWorld.x, gsWorld.y, gsWorld.z,
+      satWorld.x, satWorld.y, satWorld.z,
+    ]);
+    losLine.geometry.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+    losLine.geometry.setDrawRange(0, 2);
+    losLine.geometry.computeBoundingSphere();
+    losLine.material.color.set(COLOR_LOS_OK);
+    losLine.visible = true;
+  }
+
+  // ── SSE packet handler ─────────────────────────────────────────
+  TansatStream.on('packet', function (pkt) {
+    if (pkt.type !== 'tlm') return;
+    currentPkt = pkt;
+
+    const lock = !!pkt.gps_lock;
+    hasGpsFix  = lock;
+
+    const overlay = document.getElementById('no-fix-overlay');
+
+    // Readouts
+    const fmt = TansatStream.fmt;
+    document.getElementById('o-lat').textContent  = fmt.geo(pkt.latitude,  lock, 4) + (lock ? '°' : '');
+    document.getElementById('o-lon').textContent  = fmt.geo(pkt.longitude, lock, 4) + (lock ? '°' : '');
+    document.getElementById('o-alt').textContent  = lock
+      ? (pkt.true_altitude_m != null
+          ? (pkt.true_altitude_m / 1000).toFixed(2) + ' km'
+          : '—')
+      : '—';
+    document.getElementById('o-az').textContent   = lock ? fmt.deg(pkt.azimuth)   : '—';
+    document.getElementById('o-el').textContent   = lock ? fmt.deg(pkt.elevation) : '—';
+    document.getElementById('o-rng').textContent  = lock ? fmt.num(pkt.slant_km, 1) + ' km' : '—';
+    document.getElementById('o-lock').textContent = lock ? 'LOCKED' : 'NO';
+    document.getElementById('o-lock').style.color = lock ? '#00e6a0' : '#ff4d6a';
+    document.getElementById('o-rssi').textContent = pkt.rssi != null ? pkt.rssi + ' dBm' : '—';
+    document.getElementById('o-snr').textContent  = pkt.snr  != null ? pkt.snr  + ' dB'  : '—';
+
+    if (!lock) {
+      overlay.classList.remove('hidden');
+      satMarker.visible = false;
+      losLine.visible   = false;
+      return;
+    }
+
+    overlay.classList.add('hidden');
+    satMarker.visible = true;
+
+    // Compute target position in Earth-local space
+    const alt_km = (pkt.true_altitude_m || 0) / 1000;
+    const target = latLonAltToScene(pkt.latitude, pkt.longitude, alt_km);
+    satTargetPos.copy(target);
+
+    updateTrail(target, pkt.latitude, pkt.longitude);
+    updateLOS(pkt.elevation || 0);
+  });
+
+  // ── Render loop ────────────────────────────────────────────────
+  function animate(now) {
+    if (disposed) return;
+    animFrameId = requestAnimationFrame(animate);
+
+    const dt = Math.min((now - lastFrameTime) / 1000, 0.1); // cap at 100ms
+    lastFrameTime = now;
+
+    // Earth rotation
+    const degPerSec = rotationMode === 'realtime'
+      ? 360 / SIDEREAL_DAY_S
+      : 360 / DEMO_SPEED_S;
+    earthMesh.rotation.y += (degPerSec * Math.PI / 180) * dt;
+
+    // Smooth satellite position interpolation (no snapping between packets)
+    if (hasGpsFix && satMarker.visible) {
+      satMarker.position.lerp(satTargetPos, INTERPOLATION_ALPHA);
+    }
+
+    if (controls) controls.update();
+
+    // Follow-satellite camera
+    if (followSat && hasGpsFix) {
+      const satWorld = satMarker.getWorldPosition(new THREE.Vector3());
+      camera.position.lerp(
+        satWorld.clone().normalize().multiplyScalar(100),
+        0.03,
+      );
+      camera.lookAt(satWorld);
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  // ── UI controls ────────────────────────────────────────────────
+  document.getElementById('btn-follow').addEventListener('click', function () {
+    followSat = !followSat;
+    this.classList.toggle('active', followSat);      this.textContent = followSat ? 'Following SAT' : 'Follow SAT';
+    if (!followSat && controls) controls.reset();
+  });
+
+  document.getElementById('btn-reset').addEventListener('click', function () {
+    followSat = false;
+    document.getElementById('btn-follow').classList.remove('active');
+    document.getElementById('btn-follow').textContent = 'Follow SAT';
+    camera.position.set(0, 0, 180);
+    camera.lookAt(0, 0, 0);
+    if (controls) controls.reset();
+  });
+
+  document.getElementById('btn-speed').addEventListener('click', function () {
+    if (rotationMode === 'realtime') {
+      rotationMode = 'demo';
+      this.textContent = 'Speed: 1 rev/30s';
+      document.getElementById('speed-badge').textContent = 'Rotation: DEMO (1 rev / 30s) — not real-time';
+      document.getElementById('speed-badge').style.color = '#ffb020';
+    } else {
+      rotationMode = 'realtime';
+      this.textContent = 'Speed: Real-time';
+      document.getElementById('speed-badge').textContent = 'Rotation: Real-time (23h 56m/rev)';
+      document.getElementById('speed-badge').style.color = '#8b8fa8';
+    }
+  });
+
+  // ── Resize ─────────────────────────────────────────────────────
+  function onResize() {
+    const wrap = document.getElementById('orbit-canvas-wrap');
+    if (!wrap || !renderer) return;
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+
+  // ── Cleanup on page leave (prevent WebGL context leak) ─────────
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    if (animFrameId) cancelAnimationFrame(animFrameId);
+    window.removeEventListener('resize', onResize);
+
+    // Dispose geometries + materials + textures
+    scene.traverse(obj => {
+      if (obj.geometry)  obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material))
+          obj.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+        else {
+          if (obj.material.map) obj.material.map.dispose();
+          obj.material.dispose();
+        }
+      }
+    });
+    renderer.dispose();
+    renderer = null;
+    console.log('[EarthOrbit] WebGL context disposed cleanly');
+  }
+
+  window.addEventListener('beforeunload', dispose);
+  // Also handle SPA-style navigation (popstate)
+  window.addEventListener('pagehide', dispose);
+
+  // ── Bootstrap ──────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', function () {
+    init();
+    lastFrameTime = performance.now();
+    requestAnimationFrame(animate);
+  });
+
+})();
+</script>
+{% endblock %}

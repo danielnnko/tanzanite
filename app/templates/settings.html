@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="display:flex; flex-direction:column; gap:12px;">
+    <div class="card">
+        <div class="panel-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.2-1.6l2-1.4-2-3.4-2.3.8a7 7 0 00-2.8-1.6L13 2h-4l-.7 2.8a7 7 0 00-2.8 1.6l-2.3-.8-2 3.4 2 1.4A7 7 0 005 12a7 7 0 00.2 1.6l-2 1.4 2 3.4 2.3-.8a7 7 0 002.8 1.6L9 22h4l.7-2.8a7 7 0 002.8-1.6l2.3.8 2-3.4-2-1.4c.13-.5.2-1.05.2-1.6z"/></svg>
+            Settings
+        </div>
+    </div>
+
+    <div class="bottom-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:12px;">General</div>
+            <form action="/admin/settings" method="POST">
+                <input type="hidden" name="action" value="save_station_info">
+                <div class="form-group">
+                    <label class="form-label">Ground Station Name</label>
+                    <input type="text" name="station_name" class="form-control" value="{{ settings.get('station_name', '') }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Location</label>
+                    <input type="text" name="station_location" class="form-control" value="{{ settings.get('station_location', '') }}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:12px;">Ground Station Position</div>
+            <form action="/admin/settings" method="POST">
+                <input type="hidden" name="action" value="save_gs">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label class="form-label">Latitude</label>
+                        <input type="text" name="gs_lat" class="form-control" value="{{ settings.get('gs_lat', '') }}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Longitude</label>
+                        <input type="text" name="gs_lon" class="form-control" value="{{ settings.get('gs_lon', '') }}">
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div class="form-group">
+                        <label class="form-label">Altitude (m)</label>
+                        <input type="text" name="gs_alt" class="form-control" value="{{ settings.get('gs_alt', '') }}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Baud Rate</label>
+                        <input type="text" name="baud_rate" class="form-control" value="{{ settings.get('baud_rate', '9600') }}">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Save Position</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="bottom-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:8px;">Altitude Calibration</div>
+            <p class="stat-sub">Current offset: <strong class="mono">{{ settings.get('altitude_offset', 0) }} m</strong></p>
+            <p class="text-muted" style="font-size:11.5px; line-height:1.5;">
+                Raw barometric altitude has sensor bias. Use "Zero Altitude" while the device sits at a known height above the ground station.
+                This is a sensor calibration only &mdash; it does not change your surveyed GS position above.
+            </p>
+            <form action="/admin/settings" method="POST">
+                <input type="hidden" name="action" value="zero_altitude">
+                <button type="submit" class="btn btn-warning">Zero Altitude Now</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:12px;">Control Lock TTL</div>
+            <form action="/admin/settings" method="POST">
+                <input type="hidden" name="action" value="save_lock_ttl">
+                <div class="form-group">
+                    <label class="form-label">Lock TTL (seconds)</label>
+                    <input type="number" name="lock_ttl" class="form-control" value="{{ settings.get('control_lock_ttl', 90) }}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save TTL</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="panel-title" style="margin-bottom:12px;">Display</div>
+        <p class="text-muted" style="font-size:12px;">Theme is a per-browser preference &mdash; use the moon/sun toggle at the bottom of the sidebar.</p>
+    </div>
+</div>
+{% endblock %}

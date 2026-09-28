@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="header">
+    <h1>Firmware OTA</h1>
+</div>
+
+{% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <div class="alerts">
+      {% for message in messages %}
+        <div class="alert alert-info">{{ message }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
+<div class="alert alert-warning" style="margin-bottom: 2rem;">
+    <strong>Safety Note:</strong> Uploading firmware does not automatically flash the device. Use the uplink console to trigger OTA via the appropriate command after staging the file.
+</div>
+
+<div class="grid" style="grid-template-columns: 1fr 1fr;">
+    <div class="card">
+        <div class="card-header">
+            <h3>Upload Firmware</h3>
+        </div>
+        <div class="card-body">
+            <form action="/admin/firmware" method="POST" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label>Firmware File (.bin, .hex)</label>
+                    <input type="file" name="firmware_file" accept=".bin,.hex" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Upload</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h3>Staged Firmware Files</h3>
+        </div>
+        <div class="card-body">
+            <table style="width: 100%; text-align: left;">
+                <thead>
+                    <tr>
+                        <th>Filename</th>
+                        <th>Size</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if firmware_files %}
+                        {% for file in firmware_files %}
+                        <tr>
+                            <td>{{ file.filename }}</td>
+                            <td>{{ file.size }}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="2">No firmware files staged.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

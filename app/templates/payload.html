@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="display:flex; flex-direction:column; gap:12px;">
+
+    <div class="card">
+        <div class="panel-title-row">
+            <div class="panel-title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg>
+                Data Downlink
+            </div>
+            <span id="dl-status-badge" class="badge muted">Idle</span>
+        </div>
+        <div id="dl-progress-wrap" style="display:none;">
+            <div class="stat-sub" style="margin-bottom:6px;">Receiving image &mdash; chunk <span id="dl-chunk">0</span> / <span id="dl-total">0</span></div>
+            <div class="progress-bar" style="background: var(--border); height: 14px; border-radius: 7px; overflow: hidden;">
+                <div id="dl-progress-fill" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.2s;"></div>
+            </div>
+        </div>
+        <div id="dl-idle-msg" class="text-muted" style="font-size:12px;">No image transfer in progress. This updates automatically as IMG-tagged telemetry chunks arrive.</div>
+    </div>
+
+    <div class="card">
+        <div class="panel-title-row">
+            <div class="panel-title">Data Files</div>
+            <button class="btn btn-ghost" id="btn-refresh" style="padding:4px 10px; font-size:11px;">Refresh</button>
+        </div>
+        <table class="table data-table-sm">
+            <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Received</th><th></th></tr></thead>
+            <tbody id="files-body">
+                <tr><td colspan="5" class="text-muted">Loading&hellip;</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="card" id="gallery-card" style="display:none;">
+        <div class="panel-title" style="margin-bottom:10px;">Recent Payload Images</div>
+        <div id="image-gallery" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap:10px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function humanSize(bytes) {
+        if (bytes == null) return '\u2014';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+        return (bytes/1024/1024).toFixed(2) + ' MB';
+    }
+    function humanTime(epochSeconds) {
+        if (!epochSeconds) return '\u2014';
+        return new Date(epochSeconds * 1000).toLocaleString();
+    }
+
+    const filesBody = document.getElementById('files-body');
+    const galleryCard = document.getElementById('gallery-card');
+    const gallery = document.getElementById('image-gallery');
+
+    async function loadFiles() {
+        try {
+            const [imgRes, logRes] = await Promise.all([
+                fetch('/api/images').then(r => r.json()),
+                fetch('/api/logs').then(r => r.json())
+            ]);
+            const images = (imgRes.images || []).map(f => ({...f, kind: 'Image', url: '/api/images/' + encodeURIComponent(f.name)}));
+            const logs = (logRes.logs || []).map(f => ({...f, kind: 'Session Log', url: '/api/logs/' + encodeURIComponent(f.name)}));
+            const all = images.concat(logs).sort((a, b) => b.mtime - a.mtime);
+
+            filesBody.innerHTML = '';
+            if (all.length === 0) {
+                filesBody.innerHTML = '<tr><td colspan="5" class="text-muted">No files received yet this session.</td></tr>';
+            } else {
+                all.forEach(f => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${f.name}</td><td><span class="badge muted">${f.kind}</span></td><td>${humanSize(f.size)}</td><td>${humanTime(f.mtime)}</td><td><a href="${f.url}" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" download>Download</a></td>`;
+                    filesBody.appendChild(tr);
+                });
+            }
+
+            gallery.innerHTML = '';
+            if (images.length > 0) {
+                galleryCard.style.display = 'block';
+                images.slice(0, 12).forEach(f => {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg);';
+                    div.innerHTML = `<img src="${f.url}" style="width:100%; height:110px; object-fit:cover; display:block;"><div style="padding:6px; font-size:10px; color:var(--text-secondary); word-break:break-all;">${f.name}</div>`;
+                    gallery.appendChild(div);
+                });
+            } else {
+                galleryCard.style.display = 'none';
+            }
+        } catch (e) {
+            filesBody.innerHTML = '<tr><td colspan="5" class="text-danger">Failed to load file list.</td></tr>';
+        }
+    }
+    loadFiles();
+    document.getElementById('btn-refresh').addEventListener('click', loadFiles);
+
+    // ── Live download progress from real IMG chunk events ───────
+    if (window.TansatStream) {
+        TansatStream.on('packet', (data) => {
+            if (data.type !== 'IMG' && data.type !== 'image_ready') return;
+            const badge = document.getElementById('dl-status-badge');
+            const wrap = document.getElementById('dl-progress-wrap');
+            const idle = document.getElementById('dl-idle-msg');
+
+            if (data.type === 'IMG') {
+                badge.textContent = 'Downlink Active';
+                badge.className = 'badge solid-accent';
+                wrap.style.display = 'block';
+                idle.style.display = 'none';
+                document.getElementById('dl-chunk').textContent = data.chunk_seq;
+                document.getElementById('dl-total').textContent = data.total_chunks;
+                const pct = data.total_chunks ? Math.round(100 * data.chunk_seq / data.total_chunks) : 0;
+                document.getElementById('dl-progress-fill').style.width = pct + '%';
+            } else if (data.type === 'image_ready') {
+                badge.textContent = 'Image Received';
+                badge.className = 'badge solid-success';
+                wrap.style.display = 'none';
+                idle.style.display = 'block';
+                loadFiles();
+                setTimeout(() => { badge.textContent = 'Idle'; badge.className = 'badge muted'; }, 4000);
+            }
+        });
+    }
+</script>
+{% endblock %}

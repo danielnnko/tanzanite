@@ -1,0 +1,9 @@
+Flask>=3.0.0
+Flask-Login>=0.6.3
+psycopg2-binary>=2.9.10
+bcrypt>=4.1.0
+pyserial>=3.5
+openpyxl>=3.1.2
+Flask-Limiter>=3.7.0
+Werkzeug>=3.0.0
+pytest>=8.0.0
