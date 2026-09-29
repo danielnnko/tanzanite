@@ -49,7 +49,7 @@
     function addEvent(type, message) {
         if (!eventsSeeded) { eventsBody.innerHTML = ''; eventsSeeded = true; }
         const tr = document.createElement('tr');
-        const t = new Date().toISOString().substr(11, 8);
+        const t = new Date().toLocaleTimeString();
         const badgeClass = type === 'ERROR' ? 'danger' : type === 'WARNING' ? 'warning' : 'muted';
         tr.innerHTML = `<td class="mono text-muted">${t}</td><td><span class="badge ${badgeClass}">${type}</span></td><td>${message}</td>`;
         eventsBody.prepend(tr);

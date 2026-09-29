@@ -253,12 +253,14 @@
     let lastPacketTs = 0;
 
     function applyAttitude(pitchDeg, rollDeg, yawDeg) {
-        // Axis mapping (same convention as the server-side attitude filter):
-        //   pitch about X · yaw about Y in the previous view; we keep the
-        //   flight-hardware convention here: X=pitch, Y=yaw, Z=roll.
+        // Axis mapping — must match the server-side attitude filter (spec §3.2/3.4,
+        // tansat/physics.py): pitch integrates gx and comes from atan2(ax, ·) →
+        // rotation about X; roll integrates gy / atan2(ay, ·) → about Y; yaw
+        // integrates gz → about Z. Rotating the satellite about its sensor Y axis
+        // must tilt the model about Y (roll), not Z.
         targetRot.pitch = (Number(pitchDeg) || 0) * D2R;
-        targetRot.yaw   = (Number(yawDeg)   || 0) * D2R;
         targetRot.roll  = (Number(rollDeg)  || 0) * D2R;
+        targetRot.yaw   = (Number(yawDeg)   || 0) * D2R;
         hasAttitude = true;
     }
 
@@ -352,8 +354,8 @@
         if (hasAttitude) {
             const t = THREE.MathUtils.clamp(SMOOTHNESS * delta, 0, 1);
             cube.rotation.x = THREE.MathUtils.lerp(cube.rotation.x, targetRot.pitch, t);
-            cube.rotation.y = THREE.MathUtils.lerp(cube.rotation.y, targetRot.yaw,   t);
-            cube.rotation.z = THREE.MathUtils.lerp(cube.rotation.z, targetRot.roll,  t);
+            cube.rotation.y = THREE.MathUtils.lerp(cube.rotation.y, targetRot.roll,  t);
+            cube.rotation.z = THREE.MathUtils.lerp(cube.rotation.z, targetRot.yaw,   t);
         }
 
         renderer.render(scene, camera);

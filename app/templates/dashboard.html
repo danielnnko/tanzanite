@@ -240,7 +240,7 @@
     function addEvent(text, tone) {
         if (!eventsSeeded) { eventsBox.innerHTML = ''; eventsSeeded = true; }
         const row = document.createElement('div');
-        const t = new Date().toISOString().substr(11, 8);
+        const t = new Date().toLocaleTimeString();
         const color = tone === 'ok' ? 'var(--success)' : tone === 'warn' ? 'var(--warning)' : 'var(--accent)';
         row.innerHTML = `<span class="mono text-muted">${t}</span> &nbsp;<span style="color:${color}">&#9679;</span> ${text}`;
         eventsBox.prepend(row);

@@ -119,7 +119,7 @@
 
             if (!logSeeded) { logBody.innerHTML = ''; logSeeded = true; }
             const tr = document.createElement('tr');
-            const t = new Date().toISOString().substr(11, 8);
+            const t = new Date().toLocaleTimeString();
             tr.innerHTML = `<td class="mono">${t}</td><td class="mono">${f.num(data.seq,0)}</td><td class="mono">${f.num(data.bus_voltage,2)}</td><td class="mono">${f.num(data.temperature,1)}</td><td class="mono">${f.num(data.rssi,0)}</td>`;
             logBody.prepend(tr);
             while (logBody.children.length > 15) logBody.removeChild(logBody.lastChild);

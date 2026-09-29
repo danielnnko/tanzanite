@@ -248,7 +248,13 @@ class SessionLogger:
         logger.info("Session log: %s", self._path)
 
     def write(self, row: dict) -> None:
-        self._writer.writerow(row)
+        # Packets carry "server_ts" (ISO string); the CSV column is named
+        # "server_time" — alias it here so session logs stay timestamped and
+        # the history back-fill can restore timing after a restart.
+        out = dict(row)
+        if not out.get("server_time"):
+            out["server_time"] = row.get("server_ts") or ""
+        self._writer.writerow(out)
         if time.monotonic() - self._last_flush >= CSV_FLUSH_INTERVAL:
             self._file.flush()
             self._last_flush = time.monotonic()
@@ -289,6 +295,7 @@ class AcquisitionService:
         self._attitude_filter  = physics.AttitudeFilter()
         self._gps_filter       = physics.GpsFilter()
         self._range_rate_filter = physics.RangeRateFilter()
+        self._accel_warned = False   # accel-health watchdog latch (per connection)
 
         # Session logger
         self._session_log: Optional[SessionLogger] = None
@@ -380,6 +387,7 @@ class AcquisitionService:
             )
             self._gps_filter       = physics.GpsFilter()
             self._range_rate_filter = physics.RangeRateFilter()
+            self._accel_warned = False
             tlm_parser.reset_stats()
             self._image_buffer = {}
 
@@ -607,6 +615,22 @@ class AcquisitionService:
         pkt["pitch"] = round(pitch, 2)
         pkt["roll"]  = round(roll,  2)
         pkt["yaw"]   = round(yaw,   2)
+
+        # 5b. Accel-health watchdog: real gravity always reads ~1 g. A resting
+        # device far outside that band (dead axis, wrong sensitivity, wrong
+        # units) invalidates the gravity anchor — surface it loudly once per
+        # connection so the firmware issue isn't mistaken for filter tuning.
+        a_norm = (ax * ax + ay * ay + az_val * az_val) ** 0.5
+        if a_norm > 1.35 or a_norm < 0.65:
+            if not self._accel_warned:
+                self._accel_warned = True
+                logger.warning(
+                    "Accelerometer health check failed: |a|=%.2f g at rest "
+                    "(expected ~1 g; ax=%.2f ay=%.2f az=%.2f). Pitch/roll "
+                    "have NO gravity anchor — check firmware accel scaling, "
+                    "units (g vs m/s^2) and for dead axes.",
+                    a_norm, ax, ay, az_val,
+                )
 
         # 6. Battery percent
         voltage = pkt.get("bus_voltage", 0.0) or 0.0

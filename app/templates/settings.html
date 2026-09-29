@@ -93,8 +93,9 @@
                     <input type="number" step="any" min="0.000001" name="gyro_scale"
                            class="form-control" value="{{ settings.get('gyro_scale', '1') }}">
                     <p class="text-muted" style="font-size:11px; margin-top:4px;">
-                        Multiplier applied to gyro_x/y/z. Example: raw 16-bit IMU at &plusmn;1000 dps
-                        &rarr; 0.0305. If the firmware already sends &deg;/s, keep at 1.
+                        Multiplier applied to gyro_x/y/z. Examples: firmware in rad/s &rarr; 57.2958;
+                        raw 16-bit IMU at &plusmn;1000 dps &rarr; 0.0305. If the firmware already sends
+                        &deg;/s, keep at 1.
                     </p>
                 </div>
                 <button type="submit" class="btn btn-primary">Save Attitude Tuning</button>

@@ -131,7 +131,7 @@
     function logLine(text, cls) {
         const div = document.createElement('div');
         div.className = 'console-line ' + (cls || '');
-        const t = new Date().toISOString().substr(11, 8);
+        const t = new Date().toLocaleTimeString();
         div.textContent = `[${t}] ${text}`;
         consoleBox.appendChild(div);
         consoleBox.scrollTop = consoleBox.scrollHeight;
