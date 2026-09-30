@@ -151,17 +151,20 @@
     });
 
     // ── Polar plot (shared style with dashboard) ───────────────
+    const tc = window.TansatTheme ? TansatTheme.colors() : { grid: '#1e2a44', tick: '#8b96b3' };
     const polarCanvas = document.getElementById('polar-plot');
     const pctx = polarCanvas.getContext('2d');
+    let lastPolarAz = null, lastPolarEl = null;
     function drawPolar(az, el) {
+        lastPolarAz = az; lastPolarEl = el;
         const w = polarCanvas.width, h = polarCanvas.height;
         const cx = w/2, cy = h/2, r = w/2 - 14;
         pctx.clearRect(0, 0, w, h);
-        pctx.strokeStyle = '#1e2a44'; pctx.lineWidth = 1;
+        pctx.strokeStyle = tc.grid; pctx.lineWidth = 1;
         [1, 0.66, 0.33].forEach(f => { pctx.beginPath(); pctx.arc(cx, cy, r*f, 0, Math.PI*2); pctx.stroke(); });
         pctx.beginPath(); pctx.moveTo(cx-r, cy); pctx.lineTo(cx+r, cy);
         pctx.moveTo(cx, cy-r); pctx.lineTo(cx, cy+r); pctx.stroke();
-        pctx.fillStyle = '#5f6c8a'; pctx.font = '10px Inter'; pctx.textAlign = 'center';
+        pctx.fillStyle = tc.tick; pctx.font = '10px Inter'; pctx.textAlign = 'center';
         pctx.fillText('N', cx, cy-r-4); pctx.fillText('S', cx, cy+r+12);
         pctx.fillText('E', cx+r+8, cy+3); pctx.fillText('W', cx-r-8, cy+3);
         if (az == null || el == null || el < 0) return;
@@ -179,8 +182,15 @@
         type: 'line', data: { labels: [], datasets: [{ label: 'RSSI', borderColor: '#3b82f6', data: [], tension: 0.3 }] },
         options: { responsive: true, maintainAspectRatio: false, animation: false,
             elements: { point: { radius: 0 } },
-            scales: { x: { display: false }, y: { ticks: { color: '#8b96b3', font: {size: 9} }, grid: { color: '#1e2a44' } } },
+            scales: { x: { display: false }, y: { ticks: { color: tc.tick, font: {size: 9} }, grid: { color: tc.grid } } },
             plugins: { legend: { display: false } } }
+    });
+    document.addEventListener('themechange', () => {
+        const c = TansatTheme.colors();
+        sigChart.options.scales.y.ticks.color = c.tick;
+        sigChart.options.scales.y.grid.color = c.grid;
+        sigChart.update('none');
+        drawPolar(lastPolarAz, lastPolarEl);
     });
 
     // ── Live updates ─────────────────────────────────────────────

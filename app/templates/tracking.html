@@ -53,6 +53,7 @@
 
 {% block scripts %}
 <script>
+    const tc = window.TansatTheme ? TansatTheme.colors() : { grid: '#1e2a44', tick: '#8b96b3' };
     const canvas = document.getElementById('polar-plot');
     const ctx = canvas.getContext('2d');
     const cx = 160, cy = 160, rMax = 138;
@@ -60,7 +61,7 @@
 
     function drawPolar() {
         ctx.clearRect(0, 0, 320, 320);
-        ctx.strokeStyle = '#1e2a44'; ctx.lineWidth = 1;
+        ctx.strokeStyle = tc.grid; ctx.lineWidth = 1;
         for (let el of [0, 30, 60, 90]) {
             const r = rMax * ((90 - el) / 90);
             if (r > 0) { ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.stroke(); }
@@ -69,7 +70,7 @@
         ctx.moveTo(cx, cy - rMax); ctx.lineTo(cx, cy + rMax);
         ctx.moveTo(cx - rMax, cy); ctx.lineTo(cx + rMax, cy);
         ctx.stroke();
-        ctx.fillStyle = '#5f6c8a'; ctx.font = '11px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = tc.tick; ctx.font = '11px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('N', cx, cy - rMax - 12); ctx.fillText('S', cx, cy + rMax + 12);
         ctx.fillText('E', cx + rMax + 12, cy); ctx.fillText('W', cx - rMax - 12, cy);
 
@@ -92,6 +93,9 @@
         }
     }
     drawPolar();
+
+    // Redraw the polar plot when the theme flips (light/dark toggle)
+    document.addEventListener('themechange', drawPolar);
 
     // ── Real pass log built from observed elevation crossings ───
     const passBody = document.getElementById('pass-log-body');

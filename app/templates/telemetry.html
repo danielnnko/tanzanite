@@ -60,9 +60,10 @@
 
 {% block scripts %}
 <script>
+    const tc = window.TansatTheme ? TansatTheme.colors() : { grid: '#1e2a44', tick: '#8b96b3' };
     const chartOpts = { responsive: true, maintainAspectRatio: false, animation: false,
         elements: { point: { radius: 0 } },
-        scales: { x: { display: false }, y: { ticks: { color: '#8b96b3', font: {size: 9} }, grid: { color: '#1e2a44' } } },
+        scales: { x: { display: false }, y: { ticks: { color: tc.tick, font: {size: 9} }, grid: { color: tc.grid } } },
         plugins: { legend: { display: false } } };
 
     const mkChart = (id, color, label) => new Chart(document.getElementById(id), {
@@ -79,7 +80,20 @@
         type: 'line', data: { labels: [], datasets: [
             {label: 'Azimuth', borderColor: '#ec4899', data: [], tension: 0.25},
             {label: 'Elevation', borderColor: '#f0a020', data: [], tension: 0.25}] },
-        options: { ...chartOpts, plugins: { legend: { display: true, labels: { color: '#8b96b3', boxWidth: 10, font: {size: 10} } } } }
+        options: { ...chartOpts, plugins: { legend: { display: true, labels: { color: tc.tick, boxWidth: 10, font: {size: 10} } } } }
+    });
+
+    // Redraw charts when the theme flips (light/dark toggle)
+    document.addEventListener('themechange', () => {
+        const c = TansatTheme.colors();
+        [battC, tempC, altC, rangeC, dopplerC, azelC].forEach(ch => {
+            ch.options.scales.y.ticks.color = c.tick;
+            ch.options.scales.y.grid.color = c.grid;
+            if (ch.options.plugins.legend && ch.options.plugins.legend.labels) {
+                ch.options.plugins.legend.labels.color = c.tick;
+            }
+            ch.update('none');
+        });
     });
 
     function pushOne(chart, val) {

@@ -16,7 +16,7 @@
     <div class="card-body" style="overflow-x: auto;">
         <table class="dense" style="width: 100%; text-align: left; border-collapse: collapse;" id="audit-table">
             <thead>
-                <tr style="border-bottom: 1px solid #333;">
+                <tr style="border-bottom: 1px solid var(--border);">
                     <th>Timestamp (UTC)</th>
                     <th>Actor</th>
                     <th>Action</th>
@@ -28,7 +28,7 @@
             <tbody>
                 {% if rows %}
                     {% for row in rows %}
-                    <tr class="audit-row" style="border-bottom: 1px solid #222;">
+                    <tr class="audit-row" style="border-bottom: 1px solid var(--border);">
                         <td class="tlm-value">{{ row.timestamp }}</td>
                         <td class="actor-col">{{ row.actor }}</td>
                         <td class="action-col">{{ row.action }}</td>

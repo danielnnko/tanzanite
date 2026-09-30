@@ -169,7 +169,11 @@
     // ── Ground-track map ────────────────────────────────────────
     const map = L.map('ground-track-map', {zoomControl: false}).setView([{{ gs_lat_g }}, {{ gs_lon_g }}], 2);
     L.control.zoom({position: 'topright'}).addTo(map);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+    // Satellite imagery basemap (Esri World Imagery — same as GIS Map View)
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
+        maxZoom: 19,
+    }).addTo(map);
 
     const gsLat = {{ gs_lat_g }};
     const gsLon = {{ gs_lon_g }};
@@ -181,11 +185,23 @@
     let satAdded = false;
     let losLine = L.polyline([], {color: '#8b96b3', dashArray: '5, 5', weight: 2});
 
-    // ── Charts ──────────────────────────────────────────────────
+    // ── Charts (theme-aware: colors from CSS custom properties) ─
+    const tc = window.TansatTheme ? TansatTheme.colors() : { grid: '#1e2a44', tick: '#8b96b3' };
     const chartOpts = { responsive: true, maintainAspectRatio: false, animation: false,
         elements: { point: { radius: 0 } },
-        scales: { x: { display: false }, y: { ticks: { color: '#8b96b3', font: {size: 9} }, grid: { color: '#1e2a44' } } },
-        plugins: { legend: { labels: { color: '#8b96b3', boxWidth: 10, font: {size: 10} } } } };
+        scales: { x: { display: false }, y: { ticks: { color: tc.tick, font: {size: 9} }, grid: { color: tc.grid } } },
+        plugins: { legend: { labels: { color: tc.tick, boxWidth: 10, font: {size: 10} } } } };
+    // Redraw charts when the theme flips (light/dark toggle)
+    document.addEventListener('themechange', () => {
+        const c = TansatTheme.colors();
+        [accelChart, gyroChart].forEach(ch => {
+            ch.options.scales.y.ticks.color = c.tick;
+            ch.options.scales.y.grid.color = c.grid;
+            ch.options.plugins.legend.labels.color = c.tick;
+            ch.update('none');
+        });
+        drawPolar(lastPolarAz, lastPolarEl);
+    });
 
     const accelChart = new Chart(document.getElementById('accel-chart'), { type: 'line', data: { labels: [], datasets: [
         { label: 'X', borderColor: '#ef4444', data: [] },
@@ -208,19 +224,21 @@
         chart.update('none');
     }
 
-    // ── Polar az/el plot ────────────────────────────────────────
+    // ── Polar az/el plot ────────────────────────────────────
     const polarCanvas = document.getElementById('polar-plot');
     const pctx = polarCanvas.getContext('2d');
+    let lastPolarAz = null, lastPolarEl = null;
     function drawPolar(az, el) {
+        lastPolarAz = az; lastPolarEl = el;
         const w = polarCanvas.width, h = polarCanvas.height;
         const cx = w/2, cy = h/2, r = w/2 - 12;
         pctx.clearRect(0, 0, w, h);
-        pctx.strokeStyle = '#1e2a44';
+        pctx.strokeStyle = tc.grid;
         pctx.lineWidth = 1;
         [1, 0.66, 0.33].forEach(f => { pctx.beginPath(); pctx.arc(cx, cy, r*f, 0, Math.PI*2); pctx.stroke(); });
         pctx.beginPath(); pctx.moveTo(cx-r, cy); pctx.lineTo(cx+r, cy);
         pctx.moveTo(cx, cy-r); pctx.lineTo(cx, cy+r); pctx.stroke();
-        pctx.fillStyle = '#5f6c8a'; pctx.font = '9px Inter'; pctx.textAlign = 'center';
+        pctx.fillStyle = tc.tick; pctx.font = '9px Inter'; pctx.textAlign = 'center';
         pctx.fillText('N', cx, cy-r-3); pctx.fillText('S', cx, cy+r+10);
         pctx.fillText('E', cx+r+7, cy+3); pctx.fillText('W', cx-r-7, cy+3);
         if (az === null || el === null || el < 0) return;

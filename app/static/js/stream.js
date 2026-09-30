@@ -104,5 +104,26 @@ const TansatStream = (() => {
     // Expose on window so templates can guard with `if (window.TansatStream)`
     window.TansatStream = { on, off, connect, disconnect, fmt };
 
+    /**
+     * Theme helpers for canvas drawing (canvas can't use CSS variables
+     * directly — read the resolved custom properties instead).
+     */
+    function themeColors() {
+        const cs = getComputedStyle(document.documentElement);
+        return {
+            grid: (cs.getPropertyValue('--canvas-grid') || '#1e2a44').trim(),
+            tick: (cs.getPropertyValue('--canvas-tick') || '#8b96b3').trim(),
+            text: (cs.getPropertyValue('--text') || '#eef1f8').trim(),
+        };
+    }
+    // Fired on the document whenever the theme flips, so canvases can redraw.
+    window.TansatTheme = { colors: themeColors };
+    document.addEventListener('DOMContentLoaded', () => {
+        new MutationObserver(() => {
+            document.dispatchEvent(new CustomEvent('themechange'));
+        }).observe(document.documentElement, { attributes: true,
+                                               attributeFilter: ['data-theme'] });
+    });
+
     return { on, off, connect, disconnect, fmt };
 })();

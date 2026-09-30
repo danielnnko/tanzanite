@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="password-card" style="max-width: 540px; margin: 2rem auto; padding: 2rem; background: var(--card); border: 1px solid var(--border); border-radius: 8px;">
+    <h2>Edit profile</h2>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <ul class="flash-messages" style="list-style: none; padding: 0;">
+            {% for category, message in messages %}
+                <li class="alert alert-{{ category if category != 'message' else 'info' }}" style="margin-bottom: 1rem;">{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+    <form action="{{ url_for('auth.profile') }}" method="POST">
+        <div class="form-group" style="margin-bottom: 1rem;">
+            <label for="user-id" class="form-label">ID</label>
+            <input type="text" id="user-id" value="{{ user.id }}" disabled
+                   style="width: 100%; padding: 8px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text-muted); font-family: var(--font-mono);">
+            <small style="color: var(--text-muted); font-size: 11px;">System identifier — cannot be changed.</small>
+        </div>
+        <div class="form-group" style="margin-bottom: 1rem;">
+            <label for="full_name" class="form-label">Full name</label>
+            <input type="text" id="full_name" name="full_name" value="{{ user.full_name or '' }}"
+                   maxlength="120" class="form-control" placeholder="e.g. Asha Mwakalinga">
+        </div>
+        <div class="form-group" style="margin-bottom: 1rem;">
+            <label for="username" class="form-label">Username</label>
+            <input type="text" id="username" name="username" value="{{ user.username }}"
+                   required maxlength="64" class="form-control" autocomplete="username">
+        </div>
+        <div class="form-group" style="margin-bottom: 1.5rem;">
+            <label for="email" class="form-label">Email</label>
+            <input type="email" id="email" name="email" value="{{ user.email or '' }}"
+                   maxlength="255" class="form-control" placeholder="you@example.com" autocomplete="email">
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.25rem;">Save changes</button>
+            <a href="{{ url_for('pages.dashboard') }}" class="btn btn-ghost" style="padding: 0.75rem 1.25rem;">Cancel</a>
+            <a href="{{ url_for('auth.change_password') }}" class="btn btn-ghost" style="padding: 0.75rem 1.25rem; margin-left: auto;">Change password&hellip;</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

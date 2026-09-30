@@ -20,6 +20,7 @@ def init_db(database_url: str) -> None:
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(64) UNIQUE NOT NULL,
                 email VARCHAR(255),
+                full_name VARCHAR(120),
                 password_hash VARCHAR(255) NOT NULL,
                 role VARCHAR(16) NOT NULL CHECK (role IN ('admin','operator','viewer')),
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -27,6 +28,11 @@ def init_db(database_url: str) -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
+            """)
+            # Migration for DBs created before full_name existed (no-op when
+            # the column is already present).
+            cur.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120);
             """)
             # Create audit_log table
             cur.execute("""

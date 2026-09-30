@@ -65,6 +65,48 @@ def logout():
     return redirect(url_for("auth.login"))
 
 
+# ── Profile: personal details (own account only, any role) ──────────
+@auth_bp.route("/profile", methods=["GET", "POST"])
+@login_required
+def profile():
+    """Let any signed-in user edit their own personal details
+    (full name, username, email). ID is display-only. Password is
+    handled separately on the Account settings page."""
+    row = tansat_db.get_user_by_id(int(current_user.id))
+    if not row:
+        flash("Session user no longer exists. Please sign in again.", "danger")
+        return redirect(url_for("auth.login"))
+
+    if request.method == "POST":
+        full_name = (request.form.get("full_name") or "").strip() or None
+        username  = (request.form.get("username") or "").strip()
+        email     = (request.form.get("email") or "").strip() or None
+        try:
+            tansat_db.update_user(
+                int(current_user.id),
+                acting_user_id=int(current_user.id),
+                full_name=full_name,
+                username=username,
+                email=email,
+            )
+        except ValueError as e:
+            flash(str(e), "danger")
+        else:
+            # Username may have changed — refresh the session identity.
+            fresh = tansat_db.get_user_by_id(int(current_user.id))
+            login_user(tansat_auth.User(fresh), remember=False)
+            tansat_db.audit(
+                actor_username=current_user.username,
+                action="profile_updated",
+                target=f"user:{current_user.id}",
+                source_ip=request.remote_addr,
+                detail="User updated own profile details",
+            )
+            flash("Profile updated.", "success")
+            return redirect(url_for("auth.profile"))
+
+    return render_template("auth/profile.html", user=row)
+
 # ── Forced / voluntary password change ─────────────────────────────
 @auth_bp.route("/change-password", methods=["GET", "POST"])
 @login_required

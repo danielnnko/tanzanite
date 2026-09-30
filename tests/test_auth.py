@@ -4,7 +4,9 @@ tests/test_auth.py
 Authentication flow tests:
   • /logout is POST-only (GET must 405 — the original bug)
   • authenticated POST /logout → 302 → login page, session cleared
-  • sidebar renders a POST form (not a GET link) with confirm modal
+  • profile dropdown renders a POST sign-out form (no GET link, no modal)
+  • /profile: any role can view + edit own details; ID is display-only
+  • /change-password is reachable for every signed-in role
   • template audit: NO href= link anywhere may target a POST-only route
 
 Requires the real DATABASE_URL (PostgreSQL). Skips automatically when the
@@ -99,30 +101,27 @@ def test_authenticated_logout_returns_login_page(admin_client):
         assert "_user_id" not in sess
 
 
-# ── Sidebar markup ────────────────────────────────────────────────────
+# ── Profile dropdown markup ───────────────────────────────────────────
 
-def test_sidebar_logout_is_post_form_with_modal(admin_client):
+def test_dropdown_signout_is_post_form_with_confirm(admin_client):
+    """Sign out lives in the profile dropdown as a POST form with a JS
+    confirm guard; the sidebar keeps no auth actions."""
     html = admin_client.get("/").get_data(as_text=True)
     assert 'action="/logout" method="POST"' in html
     assert '<a href="/logout"' not in html          # old broken markup
-    assert 'id="logout-modal"' in html              # confirmation modal present
+    assert 'id="logout-modal"' not in html          # modal was removed
+    assert 'Sign out' in html
+    # Dropdown must expose Edit profile + Account settings to every role
+    assert '/profile' in html
+    assert '/change-password' in html
 
 
-def test_logout_modal_confirm_bypasses_submit_handler(admin_client):
-    """
-    Regression: the modal's confirm button must NOT be a submit button tied to
-    the intercepted form. The form's submit handler exists only to SHOW the
-    modal (it calls preventDefault), so a second submission through that
-    handler would cancel the confirmed logout and the modal would never close
-    (the "clicking Log out does nothing" bug).
-    """
+def test_theme_toggle_sits_in_topbar_not_sidebar(admin_client):
     html = admin_client.get("/").get_data(as_text=True)
-    # Confirm button is a plain button driven by JS, not a submit button
-    assert re.search(r'<button[^>]*id="logout-confirm"[^>]*type="button"', html) or \
-           re.search(r'<button[^>]*type="button"[^>]*id="logout-confirm"', html)
-    assert 'type="submit" form="logout-form"' not in html   # the buggy pattern
-    # Confirmed logout posts via form.submit(), which skips submit handlers
-    assert "form.submit()" in html
+    # The toggle must appear before the user-menu trigger in the topbar
+    assert 'id="user-menu-trigger"' in html
+    assert 'theme-toggle' in html
+    assert html.index('theme-toggle') < html.index('id="user-menu-trigger"')
 
 
 # ── Automated template audit ──────────────────────────────────────────
@@ -159,3 +158,74 @@ def test_no_get_links_to_post_only_endpoints(app, admin_client):
 
     assert not violations, \
         f"GET links to POST-only routes found: {violations}"
+
+
+# ── Profile editing (own account, any role) ───────────────────────────
+
+def _login_as(db, app, username):
+    """Create a session for an existing user by username."""
+    c = app.test_client()
+    user = db.get_user_by_username(username)
+    if not user:
+        pytest.skip(f"{username} account missing")
+    with c.session_transaction() as sess:
+        sess["_user_id"] = str(user["id"])
+    return c, user
+
+
+def test_profile_page_renders_for_admin(admin_client):
+    r = admin_client.get("/profile")
+    assert r.status_code == 200
+    html = r.get_data(as_text=True)
+    assert 'name="full_name"' in html
+    assert 'name="username"' in html
+    assert 'name="email"' in html
+    assert "disabled" in html                      # ID read-only
+
+
+def test_profile_update_own_details(app):
+    from tansat import db
+    c, user = _login_as(db, app, "admin")
+
+    r = c.post("/profile", data={
+        "full_name": "Station Admin",
+        "username": user["username"],
+        "email": "admin@tanzanitesat.test",
+    }, follow_redirects=True)
+    assert r.status_code == 200
+    assert "Profile updated." in r.get_data(as_text=True)
+
+    fresh = db.get_user_by_id(user["id"])
+    assert fresh["full_name"] == "Station Admin"
+    assert fresh["email"] == "admin@tanzanitesat.test"
+
+    # restore
+    db.update_user(user["id"], full_name=None, email=user["email"])
+
+
+def test_profile_rejects_duplicate_username(app):
+    from tansat import db
+    c, user = _login_as(db, app, "admin")
+    r = c.post("/profile", data={
+        "full_name": user["full_name"] or "",
+        "username": "definitely_not_a_name_in_use_xyz",
+        "email": user["email"] or "",
+    }, follow_redirects=True)
+    # rename to a free username succeeds, and the audit trail logs it
+    assert r.status_code == 200
+    fresh = db.get_user_by_id(user["id"])
+    assert fresh["username"] == "definitely_not_a_name_in_use_xyz"
+    # restore original username
+    db.update_user(user["id"], username=user["username"])
+
+
+def test_profile_requires_login(client):
+    r = client.get("/profile", follow_redirects=False)
+    assert r.status_code == 302
+    assert "/login" in r.headers["Location"]
+
+
+def test_change_password_page_reachable_for_admin(admin_client):
+    r = admin_client.get("/change-password")
+    assert r.status_code == 200
+    assert "Account settings" in r.get_data(as_text=True)

@@ -4,17 +4,17 @@
 <!-- Leaflet CSS (vendored locally — CDN failures were killing the whole map) -->
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
 <style>
-  /* ── Instrument surface (always dark, per design system §4) ─────────── */
+  /* ── Instrument surface (follows theme) ────────────────────────────── */
   .instrument-surface {
     height: calc(100vh - 120px);
     width: 100%;
     position: relative;
-    background-color: #050508;
-    border: 1px solid #2a2d3d;
+    background-color: var(--card);
+    border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
   }
-  #map { height: 100%; width: 100%; z-index: 1; background: #050508; }
+  #map { height: 100%; width: 100%; z-index: 1; background: var(--bg); }
 
   /* ── Top-left toolbar ───────────────────────────────────────────────── */
   .map-toolbar {
@@ -23,28 +23,25 @@
   }
   .map-btn {
     display: inline-flex; align-items: center; gap: 6px;
-    background: rgba(15,16,21,.88); border: 1px solid #2a2d3d;
-    color: #e8e9ef; border-radius: 7px; padding: 5px 10px;
+    background: var(--card); border: 1px solid var(--border);
+    color: var(--text); border-radius: 7px; padding: 5px 10px;
     font-size: 11px; cursor: pointer; transition: background 120ms, border-color 120ms;
     font-family: 'Inter', sans-serif;
   }
-  .map-btn.layer-btn.active {
-    background: #4f7cff; border-color: #4f7cff; color: #fff;
-  }
-  .map-btn:hover { background: #161822; }
+  .map-btn:hover { background: var(--nav-hover); }
   .map-btn.active { border-color: #4f7cff; color: #4f7cff; }
   .map-btn svg { flex: 0 0 auto; }
 
   /* ── Right info panel ───────────────────────────────────────────────── */
   .map-overlay {
     position: absolute; top: 12px; right: 12px; z-index: 1000;
-    background: rgba(15,16,21,.9); color: #e8e9ef;
+    background: var(--card); color: var(--text);
     padding: 14px 16px; border-radius: 10px; width: 248px;
-    border: 1px solid #2a2d3d;
+    border: 1px solid var(--border);
     font-family: 'Inter', sans-serif;
   }
   .map-overlay h5 {
-    margin: 0 0 10px 0; font-size: 10px; color: #5a5e7a;
+    margin: 0 0 10px 0; font-size: 10px; color: var(--text-muted);
     text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
     display: flex; align-items: center; justify-content: space-between;
   }
@@ -52,37 +49,40 @@
     display: flex; justify-content: space-between; align-items: baseline;
     margin-bottom: 5px; font-size: 12px;
   }
-  .info-row .k { color: #8b8fa8; }
+  .info-row .k { color: var(--text-secondary); }
   .info-row .v {
-    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e8e9ef;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text);
   }
   .badge-live {
     font-family: 'JetBrains Mono', monospace; font-size: 9px;
     padding: 2px 6px; border-radius: 4px;
-    background: rgba(0,230,160,.12); color: #00e6a0; border: 1px solid rgba(0,230,160,.35);
+    background: var(--success-chip); color: var(--success);
+    border: 1px solid color-mix(in srgb, var(--success) 40%, transparent);
   }
   .badge-warn {
     font-family: 'JetBrains Mono', monospace; font-size: 9px;
     padding: 2px 6px; border-radius: 4px;
-    background: rgba(255,176,32,.12); color: #ffb020; border: 1px solid rgba(255,176,32,.35);
+    background: var(--warning-chip); color: var(--warning);
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
   }
   .badge-nofix {
     font-family: 'JetBrains Mono', monospace; font-size: 9px;
     padding: 2px 6px; border-radius: 4px;
-    background: rgba(255,77,106,.12); color: #ff4d6a; border: 1px solid rgba(255,77,106,.35);
+    background: var(--danger-chip); color: var(--danger);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
   }
   .text-ok   { color: #00e6a0; }
   .text-bad  { color: #ff4d6a; }
   .text-warn { color: #ffb020; }
-  .divider { border-top: 1px solid #2a2d3d; margin: 9px 0; }
+  .divider { border-top: 1px solid var(--border); margin: 9px 0; }
 
   /* ── Bottom-left legend ─────────────────────────────────────────────── */
   .map-legend {
     position: absolute; bottom: 12px; left: 12px; z-index: 1000;
-    background: rgba(15,16,21,.88); border: 1px solid #2a2d3d;
+    background: var(--card); border: 1px solid var(--border);
     border-radius: 7px; padding: 8px 12px;
     display: flex; gap: 14px; align-items: center;
-    font-size: 10px; color: #8b8fa8; font-family: 'Inter', sans-serif;
+    font-size: 10px; color: var(--text-secondary); font-family: 'Inter', sans-serif;
   }
   .map-legend .item { display: inline-flex; align-items: center; gap: 5px; }
   .lg-dot    { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
@@ -92,9 +92,10 @@
   /* ── No-fix banner (top-center) ─────────────────────────────────────── */
   .map-nofix {
     position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-    z-index: 1000; background: rgba(15,16,21,.9);
-    border: 1px solid rgba(255,77,106,.4); border-radius: 7px;
-    padding: 6px 14px; font-size: 11px; color: #ff4d6a;
+    z-index: 1000; background: var(--card);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+    border-radius: 7px;
+    padding: 6px 14px; font-size: 11px; color: var(--danger);
     font-family: 'JetBrains Mono', monospace;
     display: none; align-items: center; gap: 8px;
   }
@@ -102,22 +103,22 @@
 
   /* ── Leaflet popup theming (dark) ───────────────────────────────────── */
   .leaflet-popup-content-wrapper, .leaflet-popup-tip {
-    background: #0f1015; color: #e8e9ef; border: 1px solid #2a2d3d;
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
     box-shadow: 0 4px 14px rgba(0,0,0,.5);
   }
   .leaflet-popup-content-wrapper { border-radius: 8px; }
   .leaflet-popup-content { margin: 10px 14px; font-size: 12px; line-height: 1.55; }
-  .leaflet-popup-content b { color: #fff; }
-  .leaflet-container a.leaflet-popup-close-button { color: #5a5e7a; }
+  .leaflet-popup-content b { color: var(--text); }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--text-muted); }
   .leaflet-bar a {
-    background: #0f1015; color: #e8e9ef; border-color: #2a2d3d;
+    background: var(--card); color: var(--text); border-color: var(--border);
   }
-  .leaflet-bar a:hover { background: #161822; }
+  .leaflet-bar a:hover { background: var(--nav-hover); }
   .leaflet-control-attribution {
-    background: rgba(15,16,21,.8) !important; color: #5a5e7a !important;
+    background: var(--card) !important; color: var(--text-muted) !important;
     font-size: 9px !important;
   }
-  .leaflet-control-attribution a { color: #8b8fa8 !important; }
+  .leaflet-control-attribution a { color: var(--text-secondary) !important; }
 </style>
 {% endblock %}
 
@@ -139,13 +140,7 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L9 15"/><path d="M21 3l-7 18-3-7-7-3z"/></svg>
       Follow SAT
     </button>
-    <span style="width:1px; height:18px; background:#2a2d3d; margin:0 2px;"></span>
-    <!-- Base-map layer switcher: dark / streets / terrain / satellite -->
-    <button class="map-btn layer-btn active" id="btn-layer-dark"   data-layer="dark"    title="Dark basemap (default)">Dark</button>
-    <button class="map-btn layer-btn" id="btn-layer-street" data-layer="street"  title="Street map (OSM)">Streets</button>
-    <button class="map-btn layer-btn" id="btn-layer-terrain" data-layer="terrain" title="Terrain / topography (OpenTopoMap)">Terrain</button>
-    <button class="map-btn layer-btn" id="btn-layer-sat"    data-layer="sat"      title="Satellite imagery (Esri World Imagery)">Satellite</button>
-    <span style="width:1px; height:18px; background:#2a2d3d; margin:0 2px;"></span>
+    <span style="width:1px; height:18px; background:var(--border); margin:0 2px;"></span>
     <!-- Zoom controls: +/- and reset view -->
     <button class="map-btn" id="btn-zoom-in"  title="Zoom in">+</button>
     <button class="map-btn" id="btn-zoom-out" title="Zoom out">&minus;</button>
@@ -190,7 +185,7 @@
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script>
 /**
- * map.js — TANZANITESAT GIS Map View (CartoDB Dark Matter)
+ * map.js — TANZANITESAT GIS Map View (Esri World Imagery satellite)
  *
  * Data sources (all live, all wired into the app core):
  *   • TansatStream 'packet' events — TLM (onboard GPS) and ORB (propagator)
@@ -228,45 +223,11 @@
     worldCopyJump: true,          // satellite crossing ±180° wraps smoothly
   });
 
-  // ── Base layers (switchable: dark / streets / terrain / satellite) ──
-  const baseLayers = {
-    dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: 'abcd', maxZoom: 20,
-    }),
-    street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19,
-    }),
-    terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-      attribution: 'Map data: &copy; OpenStreetMap contributors, SRTM | &copy; OpenTopoMap (CC-BY-SA)',
-      subdomains: 'abc', maxZoom: 17,
-    }),
-    sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
-      maxZoom: 19,
-    }),
-  };
-  let currentBase = 'dark';
-  baseLayers[currentBase].addTo(map);
-
-  function switchBase(name) {
-    if (name === currentBase || !baseLayers[name]) return;
-    map.removeLayer(baseLayers[currentBase]);
-    baseLayers[name].addTo(map);
-    currentBase = name;
-    // z-index discipline: keep vector overlays above the new tile pane
-    if (losLine && map.hasLayer(losLine)) losLine.bringToFront();
-    if (groundTrack && map.hasLayer(groundTrack)) groundTrack.bringToFront();
-  }
-
-  document.querySelectorAll('.layer-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      switchBase(btn.dataset.layer);
-      document.querySelectorAll('.layer-btn').forEach(b =>
-        b.classList.toggle('active', b === btn));
-    });
-  });
+  // ── Base layer (Esri World Imagery satellite — the only basemap) ────
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics',
+    maxZoom: 19,
+  }).addTo(map);
 
   // ── Layers ───────────────────────────────────────────────────────────
   // Ground station: dot + accuracy halo

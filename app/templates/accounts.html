@@ -49,7 +49,7 @@
     <div class="card-body" style="overflow-x: auto;">
         <table class="dense" style="width: 100%; text-align: left; border-collapse: collapse;">
             <thead>
-                <tr style="border-bottom: 1px solid #333;">
+                <tr style="border-bottom: 1px solid var(--border);">
                     <th>Username</th>
                     <th>Email</th>
                     <th>Role</th>
@@ -61,15 +61,15 @@
             </thead>
             <tbody>
                 {% for u in users %}
-                <tr style="border-bottom: 1px solid #222;">
+                <tr style="border-bottom: 1px solid var(--border);">
                     <td>{{ u.username }}</td>
                     <td>{{ u.email or '—' }}</td>
                     <td>{{ u.role }}</td>
                     <td>
                         {% if u.status == 'suspended' %}
-                            <span class="badge badge-danger" style="color: #ff4d6a;">Suspended</span>
+                            <span class="badge badge-danger" style="color: var(--danger);">Suspended</span>
                         {% else %}
-                            <span class="badge badge-success" style="color: #00e6a0;">Active</span>
+                            <span class="badge badge-success" style="color: var(--success);">Active</span>
                         {% endif %}
                     </td>
                     <td>{{ 'Yes' if u.must_change_pw else 'No' }}</td>

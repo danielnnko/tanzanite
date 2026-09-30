@@ -2,6 +2,15 @@
 <html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
+    <script>
+        // Apply the saved theme BEFORE first paint — setting it at the bottom
+        // of <body> caused a flash of the dark theme on every navigation.
+        (function () {
+            try {
+                document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+            } catch (e) { /* storage unavailable — keep default */ }
+        })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GroundStation — {{ title|default('') }}</title>
     <!-- Fonts -->
@@ -89,7 +98,7 @@
 
                 <div class="nav-section-label">Advanced Views</div>
                 <div class="nav-item"><a href="/map" class="{{ 'active' if request.path == '/map' }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg> <span class="label">GIS Map View</span></a></div>
-                <div class="nav-item"><a href="/attitude" class="{{ 'active' if request.path == '/attitude' }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg> <span class="label">3D Attitude View</span></a></div>
+                <div class="nav-item"><a href="/attitude" class="{{ 'active' if request.path == '/attitude' }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg> <span class="label">CubeSat 3D View</span></a></div>
                 <div class="nav-item"><a href="/earth-orbit" class="{{ 'active' if request.path == '/earth-orbit' }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a13.5 13.5 0 010 18M12 3a13.5 13.5 0 000 18"/></svg> <span class="label">Earth Orbit View</span></a></div>
 
                 {% if current_user and current_user.role == 'admin' %}
@@ -101,35 +110,10 @@
             </div>
 
             <div class="sidebar-footer">
-                <div class="connection-status flex items-center gap-2">
-                    <span class="live-indicator" style="display: none;"></span>
-                    <span class="status-dot disconnected"></span>
-                    <span class="status-label">Disconnected</span>
-                </div>
-                <div class="user-info flex justify-between items-center">
-                    <span class="username">
-                        {% if current_user %}
-                        {{ current_user.username }}
-                        <span class="badge muted role-badge">{{ current_user.role }}</span>
-                        {% else %}
-                        Guest
-                        {% endif %}
-                    </span>
-                </div>
+                <!-- Auth actions (sign out) live in the topbar profile
+                     dropdown now; the footer stays intentionally minimal. -->
                 <div class="footer-actions flex justify-between items-center">
-                    <!-- Logout must be a POST: the route only accepts POST, and a
-                         GET link here previously caused a 405 Method Not Allowed.
-                         A confirm modal guards against accidental logouts. -->
-                    <form id="logout-form" action="{{ url_for('auth.logout') }}" method="POST" style="margin:0;">
-                        <button type="submit" class="text-muted logout-link"
-                                style="background:none; border:none; padding:0; margin:0; cursor:pointer; font:inherit; color:inherit; text-decoration:none;">
-                            Logout
-                        </button>
-                    </form>
-                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Theme" aria-label="Toggle color theme">
-                        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
-                        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-                    </button>
+                    <span class="text-muted" style="font-size: 10.5px;">GroundStation v2.0</span>
                 </div>
             </div>
         </nav>
@@ -149,14 +133,70 @@
                         <div class="topbar-loc">{{ station_location }}</div>
                     </div>
 
-                    <div class="topbar-status">
-                        <span class="live-indicator-dot status-dot connected" style="width:7px;height:7px;"></span>
-                        System Online
+                    <!-- Live link status (real state via stream.js; replaces the
+                         old hardcoded "System Online" and the sidebar indicator) -->
+                    <div class="topbar-status" id="connection-status">
+                        <span class="live-indicator" style="display: none;"></span>
+                        <span class="status-dot disconnected"></span>
+                        <span class="status-label">Disconnected</span>
                     </div>
 
-                    <div class="topbar-user">
-                        <span class="avatar">{{ (current_user.username[0]|upper) if current_user and current_user.username else '?' }}</span>
-                        <span style="font-size:12px;">{{ current_user.username if current_user else 'Guest' }}</span>
+                    <!-- Theme toggle: moved next to the user avatar for quick
+                         access (was in the sidebar footer) -->
+                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Theme" aria-label="Toggle color theme">
+                        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+                        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+                    </button>
+
+                    <!-- Profile dropdown (Edit profile / Account settings) —
+                         available to every signed-in role. -->
+                    <div class="user-menu">
+                        <button type="button" class="topbar-user user-menu-trigger" id="user-menu-trigger"
+                                aria-haspopup="true" aria-expanded="false" aria-controls="user-dropdown"
+                                title="Account menu">
+                            <span class="avatar">{{ (current_user.username[0]|upper) if current_user and current_user.username else '?' }}</span>
+                            <span class="user-menu-name">{{ current_user.username if current_user else 'Guest' }}</span>
+                            {% if current_user %}<span class="badge muted role-badge">{{ current_user.role }}</span>{% endif %}
+                            <svg class="user-menu-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 15l-6-6-6 6"/></svg>
+                        </button>
+
+                        {% if current_user %}
+                        <div class="user-dropdown" id="user-dropdown" role="menu" aria-label="Account menu">
+                            <div class="ud-header">
+                                <div class="ud-name">{{ current_user.username }}</div>
+                                <div class="ud-email">{{ current_user.email or 'No email set' }}</div>
+                            </div>
+                            <ul class="ud-menu">
+                                <li>
+                                    <a role="menuitem" href="{{ url_for('auth.profile') }}">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                        Edit profile
+                                    </a>
+                                </li>
+                                <li>
+                                    <a role="menuitem" href="{{ url_for('auth.change_password') }}">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                        Account settings
+                                    </a>
+                                </li>
+                            </ul>
+                            <hr class="ud-divider">
+                            <ul class="ud-menu">
+                                <li>
+                                    <!-- Sign out: direct POST to the logout route
+                                         (route accepts POST only). Native confirm
+                                         guards against accidental sign-out. -->
+                                    <form action="{{ url_for('auth.logout') }}" method="POST"
+                                          onsubmit="return confirm('Sign out of TANZANITESAT?');">
+                                        <button type="submit" role="menuitem" class="ud-signout">
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+                                            Sign out
+                                        </button>
+                                    </form>
+                                </li>
+                            </ul>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -183,7 +223,9 @@
     <!-- Scripts -->
     <script src="/static/js/stream.js"></script>
     <script>
-        // Theme toggle logic — swaps SVG icons via data-theme (no emoji)
+        // Theme toggle — swaps SVG icons via data-theme. Initial value is
+        // applied by the inline script in <head> (pre-paint); here we only
+        // persist and flip the attribute.
         function toggleTheme() {
             const html = document.documentElement;
             const currentTheme = html.getAttribute('data-theme');
@@ -192,9 +234,43 @@
             localStorage.setItem('theme', newTheme);
         }
 
-        // Initialize theme from localStorage
-        const savedTheme = localStorage.getItem('theme') || 'dark';
-        document.documentElement.setAttribute('data-theme', savedTheme);
+        // ── Profile dropdown: open/close behavior ────────────────────
+        // Opens on click, closes on outside click, Escape, or menu-item
+        // activation. Trigger carries aria-expanded for accessibility.
+        (function () {
+            const trigger = document.getElementById('user-menu-trigger');
+            const panel = document.getElementById('user-dropdown');
+            if (!trigger || !panel) return;
+
+            function setOpen(open) {
+                panel.classList.toggle('open', open);
+                trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+            function isOpen() { return panel.classList.contains('open'); }
+
+            trigger.addEventListener('click', (e) => {
+                e.stopPropagation();          // don't let the outside-click handler close it immediately
+                setOpen(!isOpen());
+            });
+
+            document.addEventListener('click', (e) => {
+                if (isOpen() && !panel.contains(e.target)) setOpen(false);
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && isOpen()) {
+                    setOpen(false);
+                    trigger.focus();          // return focus to the trigger
+                }
+            });
+
+            // Close after activating any menu item (sign-out submits the
+            // logout form via its own onclick; edit-profile/settings/support
+            // are normal links that navigate away).
+            panel.querySelectorAll('[role="menuitem"]').forEach(item => {
+                item.addEventListener('click', () => setOpen(false));
+            });
+        })();
 
         // Local-time clock updater (browser timezone — e.g. EAT for Dar es
         // Salaam). Session CSVs and logs stay UTC for interoperability.
@@ -280,59 +356,5 @@
     </script>
 
     {% block scripts %}{% endblock %}
-
-    <!-- ── Logout confirmation modal (uses shared .modal-* styles) ── -->
-    <div class="modal-overlay" id="logout-modal"
-         style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000;">
-        <div class="modal-box card" style="width: 340px;">
-            <div class="panel-title" style="margin-bottom:10px;">Log out?</div>
-            <p class="text-muted" style="font-size:12.5px; line-height:1.5; margin-bottom:14px;">
-                You will be returned to the login page. Live control sessions and
-                unsent uplink drafts on this page will not be preserved.
-            </p>
-            <div style="display:flex; justify-content:flex-end; gap:10px;">
-                <button type="button" class="btn btn-ghost" id="logout-cancel">Cancel</button>
-                <!-- type="button" + form.submit(): must NOT re-trigger the form's
-                     submit handler, which exists only to show this modal and would
-                     preventDefault() the confirmed submission (the "stuck modal" bug). -->
-                <button type="button" id="logout-confirm" class="btn btn-primary">Log out</button>
-            </div>
-        </div>
-    </div>
-    <script>
-        (function () {
-            const form    = document.getElementById('logout-form');
-            const modal   = document.getElementById('logout-modal');
-            const confirm = document.getElementById('logout-confirm');
-            if (!form || !modal || !confirm) return;
-
-            // Intercept the sidebar button click: show the modal instead of posting.
-            form.addEventListener('submit', (e) => {
-                e.preventDefault();
-                modal.style.display = 'flex';
-            });
-
-            // Confirmed logout: form.submit() performs the POST directly and
-            // deliberately does NOT fire the submit event again.
-            confirm.addEventListener('click', () => {
-                modal.style.display = 'none';
-                form.submit();
-            });
-
-            document.getElementById('logout-cancel').addEventListener('click', () => {
-                modal.style.display = 'none';
-            });
-            // Click on the dark backdrop dismisses the modal
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) modal.style.display = 'none';
-            });
-            // Escape key closes the modal
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape' && modal.style.display !== 'none') {
-                    modal.style.display = 'none';
-                }
-            });
-        })();
-    </script>
 </body>
 </html>

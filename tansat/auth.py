@@ -12,6 +12,7 @@ class User(UserMixin):
         self.id = str(row['id'])
         self.username = row['username']
         self.email = row.get('email')
+        self.full_name = row.get('full_name')
         self.role = row['role']  # 'admin' | 'operator' | 'viewer'
         self._is_active = row['is_active']
         self.must_change_password = row['must_change_password']
