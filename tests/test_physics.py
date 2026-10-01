@@ -41,25 +41,35 @@ def test_attitude_filter_seeding():
 
 def test_attitude_filter_gyro_responsiveness():
     # Rotating at a realistic hand-rotation rate must move the attitude
-    # promptly once calibrated, not sit near zero.
+    # promptly once calibrated, not sit near zero. The accel vector rotates
+    # consistently with the gyro (per the filter's convention: pitch from
+    # atan2(ax, ·), so gravity swings ax = sin(theta), az = cos(theta)).
+    from math import sin, cos, radians
     f = AttitudeFilter()
     for _ in range(10):                             # complete bias warmup
-        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.02)
+        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 3.0)
     p, r, y = (None, None, None)
-    for _ in range(25):                             # 25 packets * 0.02 s = 0.5 s
-        p, r, y = f.update(0.0, 0.0, 1.0, 90.0, 0.0, 0.0, 0.02)
-    # 90 deg/s for ~0.5 s => ~45 deg of pitch
-    assert abs(p) > 30.0, f"attitude barely moved: pitch={p}"
+    theta = 0.0
+    for _ in range(2):                              # 2 packets at the REAL 3 s
+        theta += radians(30.0) * 3.0                # cadence: 30 deg/s -> 90 deg
+        p, r, y = f.update(sin(theta), 0.0, cos(theta), 30.0, 0.0, 0.0, 3.0)
+    # 30 deg/s for ~6 s => ~180 deg of pitch (wrapped)
+    assert abs(p) > 90.0, f"attitude barely moved: pitch={p}"
 
 def test_attitude_filter_motion_gate_blocks_noisy_accel():
-    # While |a| >> 1 g (device being handled), garbage accel must NOT be
-    # blended in; attitude should track the gyro instead.
+    # While |a| swings wildly (device being handled), garbage accel must NOT
+    # be blended in; attitude should track the gyro instead. The accel must
+    # VARY as a real shake does — a constant vector with a still gyro is
+    # indistinguishable from "parked tilted on a mis-scaled sensor" and the
+    # filter is allowed to trust it.
     f = AttitudeFilter()
     f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.02)   # seed at rest, accel is pure gravity
-    for _ in range(30):                             # violent shake, no rotation
-        p, r, _ = f.update(4.0, 4.0, 1.0, 0.0, 0.0, 0.0, 0.02)
-    # accel-derived roll from (4,4,1) is atan2(4, sqrt(17)) ≈ 44 deg —
-    # that garbage must stay out of the estimate.
+    shake = [(1.0, 2.0, 0.5), (6.0, 3.0, 2.0), (12.0, 8.0, 3.0),
+             (20.0, 15.0, 5.0), (8.0, 20.0, 10.0)]  # |a| swings 2.3 -> 25.5 g
+    for i in range(30):                             # violent shake, no rotation
+        ax, ay, az = shake[i % len(shake)]
+        p, r, _ = f.update(ax, ay, az, 0.0, 0.0, 0.0, 0.02)
+    # accel-derived roll from these is 20-70 deg — that garbage must stay out.
     assert abs(r) < 10.0, f"noisy accel leaked into attitude: roll={r}"
 
 def test_attitude_filter_reanchors_after_motion_stops():
@@ -112,13 +122,18 @@ def test_bias_calibrated_from_warmup():
 
 def test_long_gap_rotation_fully_integrated():
     # A 90 deg/s rotation sampled every 3 s (dt clamp old max was 0.5 s)
-    # must integrate the FULL interval, not a truncated one.
+    # must integrate the FULL interval, not a truncated one. Accel rotates
+    # consistently (gravity swings out of the rest direction immediately,
+    # so the motion gate coasts on the gyro — as with real handling).
+    from math import sin, cos, radians
     f = AttitudeFilter()
     for _ in range(12):                             # warmup at rest
         f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.1)
     p, r, y = 0.0, 0.0, 0.0
+    theta = 0.0
     for _ in range(2):                              # two packets, 3 s apart
-        p, r, y = f.update(0.0, 0.0, 1.0, 90.0, 0.0, 0.0, 3.0)
+        theta += radians(90.0) * 3.0
+        p, r, y = f.update(sin(theta), 0.0, cos(theta), 90.0, 0.0, 0.0, 3.0)
     # ~6 s at 90 deg/s (minus a little for the moving-average lag) => >90 deg
     assert abs(p) > 90.0, f"rotation truncated: pitch={p}"
 
@@ -161,23 +176,31 @@ def test_rad_s_pipeline_end_to_end():
     # Full sanity: rad/s firmware (scale 57.2958), biased gyro, 3 s packets,
     # BROKEN accel (|a|=0.5 g — matches current real hardware). Rotate 90 deg/s
     # then park: the pose must hold with no bias drift (pure dead-reckoning).
+    from math import sin, cos, radians
     f = AttitudeFilter(gyro_scale=57.2958)
     bias = [0.02, 0.03, 0.01]                       # rad/s, as measured
-    bad_accel = (0.0, -0.44, 0.0)                   # |a| = 0.44 g, always invalid
-    for _ in range(12):                             # warmup at rest
-        f.update(*bad_accel, *bias, 3.0)
+    S = 0.44                                        # mis-scaled |a| ("g")
+    def accel(theta_deg):
+        th = radians(theta_deg)
+        return (S * sin(th), -S, S * cos(th))       # consistent rotation
+    for _ in range(12):                             # warmup at rest (theta 0)
+        f.update(*accel(0.0), *bias, 3.0)
     p, r, y = 0.0, 0.0, 0.0
+    theta = 0.0
     for _ in range(2):                              # 90 deg/s for ~6 s total
-        p, r, y = f.update(*bad_accel, 90/57.2958 + bias[0], bias[1], bias[2], 3.0)
+        theta += 90.0 * 3.0
+        p, r, y = f.update(*accel(theta), 90/57.2958 + bias[0], bias[1], bias[2], 3.0)
     # ~6 s at 90 deg/s => ~540 deg, wraps to 180 after _wrap180
     assert abs(p) > 170.0, f"spin under-integrated: pitch={p}"
-    for _ in range(10):                             # park for ~30 s
-        p2, r2, y2 = f.update(*bad_accel, *bias, 3.0)
-    # No valid accel anchor -> pure gyro coast. Bias was removed at warmup,
-    # so the pose must hold.
+    for _ in range(10):                             # park for ~30 s (theta 0 pose)
+        p2, r2, y2 = f.update(*accel(0.0), *bias, 3.0)
+    # The mis-scaled accel is learned as the rest reference (|a|=0.44 g
+    # constant, gyro parked) — so instead of coasting forever on the gyro,
+    # the filter must RE-ANCHOR to the accel-derived attitude (flat, pitch 0).
+    # This recovery is exactly what fixes the random spins on real hardware.
     def wrap_diff(a, b):
         return abs((a - b + 180.0) % 360.0 - 180.0)
-    assert wrap_diff(p2, p) < 10.0, f"parked drift too high: {p} -> {p2}"
+    assert wrap_diff(p2, 0.0) < 15.0, f"did not re-anchor to accel reference: pitch={p} -> {p2}"
 
 def test_bias_recovers_from_wrong_seed():
     # Regression: if warmup seeds a wrong bias (satellite moving at connect),
@@ -208,3 +231,44 @@ def test_rad_s_reanchors_with_valid_accel():
     for _ in range(20):                             # park ~60 s, flat, at rest
         p2, r2, y2 = f.update(0.0, 0.0, 1.0, *bias, 3.0)
     assert abs(p2) < 5.0, f"did not re-anchor to flat: pitch={p2}"
+
+
+def test_frozen_gyro_with_miscaled_accel_does_not_spin():
+    """Regression for the real hardware fault (session 2026-09-30T11:43Z):
+
+    accel rests at (5.75, -22.09, 19.22) — |a| ≈ 29.9 in firmware units —
+    and the gyro freezes at a constant (-1.09, 0.05, -0.96) rad/s while the
+    CubeSat is untouched. The old filter integrated the phantom -62 deg/s
+    yaw rate and the pose span random angles every packet. The fixed filter
+    must hold pitch/roll on the gravity reference and freeze yaw.
+    """
+    f = AttitudeFilter(gyro_scale=57.2958)
+    REST = (5.75, -22.09, 19.22)
+    FROZEN = (-1.09, 0.05, -0.96)
+    for _ in range(12):                              # warmup, parked
+        f.update(*REST, 0.0, 0.0, 0.0, 3.0)
+    p0, r0, y0 = f.update(*REST, 0.0, 0.0, 0.0, 3.0)
+    for _ in range(20):                              # frozen gyro, parked
+        p, r, y = f.update(*REST, *FROZEN, 3.0)
+    # pitch/roll stay anchored to the true resting attitude; yaw never walks
+    assert abs(p - p0) < 8.0,  f"pitch drifted: {p0} -> {p}"
+    assert abs(r - r0) < 8.0,  f"roll drifted:  {r0} -> {r}"
+    def wrap_diff(a, b):
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+    assert wrap_diff(y, y0) < 5.0, f"yaw spun: {y0} -> {y}"
+
+
+def test_real_rotation_still_integrates_with_miscaled_accel():
+    """A REAL rotation (accel direction swings with it) must still move the
+    pose — the contradiction veto must not suppress genuine motion."""
+    from math import sin, cos, radians
+    f = AttitudeFilter(gyro_scale=57.2958)
+    S = 29.9
+    for _ in range(12):                              # warmup, parked flat-ish
+        f.update(0.0, -S, 0.0, 0.0, 0.0, 0.0, 3.0)
+    theta = 0.0
+    for _ in range(3):                               # 30 deg/s, 3 s packets
+        theta += 90.0
+        p, r, y = f.update(S * sin(radians(theta)), -S, S * cos(radians(theta)),
+                           30/57.2958, 0.0, 0.0, 3.0)
+    assert abs(p) > 60.0, f"real rotation suppressed: pitch={p}"

@@ -61,7 +61,7 @@
                     <div class="panel-title">Satellite Tracking</div>
                     <div style="display:flex; align-items:center; gap:14px; font-size:11px; color:var(--text-secondary);">
                         <span><span style="color:var(--danger);">&#9679;</span> Spacecraft</span>
-                        <span><span style="color:var(--accent);">&#9650;</span> Ground Station</span>
+                        <span><span style="display:inline-flex;vertical-align:middle;" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4f7cff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a9 9 0 0118 0"/><path d="M12 15v6"/><path d="M8 21h8"/><path d="M12 15L20 6"/><circle cx="12" cy="15" r="1.8" fill="#4f7cff" stroke="none"/></svg></span> Ground Station</span>
                     </div>
                 </div>
                 <div id="ground-track-map" style="height:320px; width:100%; margin-top:10px;"></div>
@@ -178,8 +178,9 @@
     const gsLat = {{ gs_lat_g }};
     const gsLon = {{ gs_lon_g }};
 
-    const gsIcon = L.divIcon({className: 'gs-marker', html: '<div style="color: var(--accent); font-size: 20px;">&#9650;</div>', iconSize: [20, 20], iconAnchor: [10, 10]});
-    L.marker([gsLat, gsLon], {icon: gsIcon}).addTo(map);
+    // Ground station: brand dish marker — the same TansatGS symbol used on
+    // the GIS Map View and the 3D Earth Orbit View.
+    L.marker([gsLat, gsLon], { icon: TansatGS.divIcon() }).addTo(map);
 
     const satIcon = L.circleMarker([0,0], {color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1, radius: 6});
     let satAdded = false;

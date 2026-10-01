@@ -32,7 +32,15 @@ def create_app(config: dict | None = None) -> Flask:
     app.secret_key = secret_key
 
     # ── Config overrides ─────────────────────────────────────────
-    app.config["DATA_DIR"] = os.environ.get("DATA_DIR", "data")
+    # DATA_DIR must be ABSOLUTE: Flask's send_file() resolves relative
+    # paths against the app package folder (app/data/…) while everything
+    # else (route exists() checks, the acquisition service) uses the
+    # process CWD (project root). That mismatch made every log/image
+    # download fail with a FileNotFoundError → HTTP 500 → the browser
+    # reported "site was not available" instead of downloading.
+    data_dir = Path(os.environ.get("DATA_DIR", "data")).resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    app.config["DATA_DIR"] = str(data_dir)
     app.config["DATABASE_URL"] = os.environ.get(
         "DATABASE_URL",
         "postgresql://localhost/tansat"

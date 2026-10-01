@@ -211,9 +211,59 @@
 
     // ── Body-frame axis triads (pitch=X, roll=Y, yaw=Z colors) ───────
     const AXIS_LEN = 1.8;
-    cube.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), AXIS_LEN, 0xff4d6a, 0.18, 0.09));
-    cube.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), AXIS_LEN, 0x00e6a0, 0.18, 0.09));
-    cube.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), AXIS_LEN, 0x4f7cff, 0.18, 0.09));
+    // Axis LABELS — billboarded sprites pinned just past each arrow tip.
+    // Colors match the pitch/roll/yaw readout cards below the scene
+    // (pitch=X red, roll=Y green, yaw=Z blue) so the axes map 1:1 to the
+    // data received on each axis.
+    function makeAxisLabelSprite(text, colorCss) {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 96;
+        const ctx = c.getContext('2d');
+        ctx.font = 'bold 56px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // Soft dark halo so the letter reads on any background
+        ctx.shadowColor = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = colorCss;
+        ctx.fillText(text, 128, 48);
+        const tex = new THREE.CanvasTexture(c);
+        tex.anisotropy = 4;
+        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+        const spr = new THREE.Sprite(mat);
+        spr.scale.set(0.9, 0.34, 1);          // world units
+        spr.renderOrder = 5;                   // draw over the model
+        return spr;
+    }
+
+    function axisArrow(dir, color) {
+        return new THREE.ArrowHelper(dir, new THREE.Vector3(), AXIS_LEN, color, 0.18, 0.09);
+    }
+
+    const axisDefs = [
+        { dir: new THREE.Vector3(1, 0, 0), color: 0xff4d6a, label: 'X', labelDist: AXIS_LEN + 0.55 },
+        // +Y carries the deployed whip antenna (tip at y=2.5) — place the
+        // label just above the antenna tip so it doesn't collide with it.
+        { dir: new THREE.Vector3(0, 1, 0), color: 0x00e6a0, label: 'Y', labelDist: 2.95 },
+        { dir: new THREE.Vector3(0, 0, 1), color: 0x4f7cff, label: 'Z', labelDist: AXIS_LEN + 0.55 },
+    ];
+    axisDefs.forEach(def => {
+        cube.add(axisArrow(def.dir, def.color));
+        const spr = makeAxisLabelSprite(def.label, '#' + def.color.toString(16).padStart(6, '0'));
+        spr.position.copy(def.dir).multiplyScalar(def.labelDist);   // just past the arrowhead/antenna
+        cube.add(spr);
+    });
+
+    // Axis legend (top-center of the scene): names each labeled axis with
+    // the telemetry quantity it carries, so X→Pitch, Y→Roll, Z→Yaw is
+    // explicit even at a glance.
+    const axisLegend = document.createElement('div');
+    axisLegend.style.cssText = 'position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:10; display:flex; gap:14px; background:var(--card); border:1px solid var(--border); border-radius:7px; padding:5px 12px; font-family:JetBrains Mono,monospace; font-size:10.5px; color:var(--text-secondary);';
+    axisLegend.innerHTML =
+        '<span style="color:#ff4d6a;">● X = Pitch</span>' +
+        '<span style="color:#00e6a0;">● Y = Roll</span>' +
+        '<span style="color:#4f7cff;">● Z = Yaw</span>';
+    container.appendChild(axisLegend);
 
     // ── Reference grid floor ─────────────────────────────────────────
     const grid = new THREE.GridHelper(9, 18, 0x2a2d3d, 0x171a24);
@@ -242,15 +292,46 @@
         target.r = Math.max(3.2, Math.min(18, target.r + e.deltaY * 0.01));
     }, { passive: false });
 
-    // ── Telemetry → attitude ─────────────────────────────────────────
+    // ── Telemetry → attitude ─────────────────────────────────────
     const D2R = Math.PI / 180;
     // Delta-based lerp factor (from the React reference Cube component):
     // larger = snappier, smaller = more lag. Multiplied by frame delta so the
-    // response is identical at any frame rate.
-    const SMOOTHNESS = 5;
+    // response is identical at any frame rate. 14 ≈ reaches the new packet's
+    // attitude in ~0.2 s — the model tracks the LIVE signal per packet instead
+    // of visibly easing behind it (which read as a simulated animation).
+    const SMOOTHNESS = 14;
     const targetRot = { pitch: 0, yaw: 0, roll: 0 };  // radians, where the model should go
     let hasAttitude = false;
     let lastPacketTs = 0;
+
+    // Parked deadband: the accelerometer's resting noise wobbles the computed
+    // attitude by ~±0.7° (±0.6 units on a |a| of 29.9, plus a 50%-per-packet
+    // blend at this packet rate) — up to ~1.4° peak-to-peak between packets.
+    // The deadband must exceed that spread or noise walks the anchor and the
+    // model still jitters. 1.8° is far below any hand rotation per packet
+    // (≥5° at this 3 s cadence), so real motion passes straight through.
+    const DEADBAND_DEG = 1.8;
+    let displayed = null;   // radians currently shown (last accepted attitude)
+    function withinDeadband(p, r, y) {
+        if (!displayed) return false;
+        const near = (a, b) => {
+            let d = Math.abs(a - b) % (2 * Math.PI);
+            if (d > Math.PI) d = 2 * Math.PI - d;
+            return d < DEADBAND_DEG * D2R;
+        };
+        return near(p, displayed.pitch) && near(r, displayed.roll) && near(y, displayed.yaw);
+    }
+
+    // Shortest-arc lerp: attitude angles wrap at ±180°, so a naive lerp from
+    // 170° to −170° would spin the model the LONG way (340°) like a canned
+    // animation. Taking the wrap into account moves it the real 20° the
+    // hardware actually rotated.
+    function lerpAngle(a, b, t) {
+        let d = (b - a) % (2 * Math.PI);
+        if (d > Math.PI) d -= 2 * Math.PI;
+        if (d < -Math.PI) d += 2 * Math.PI;
+        return a + d * t;
+    }
 
     function applyAttitude(pitchDeg, rollDeg, yawDeg) {
         // Axis mapping — must match the server-side attitude filter (spec §3.2/3.4,
@@ -258,9 +339,16 @@
         // rotation about X; roll integrates gy / atan2(ay, ·) → about Y; yaw
         // integrates gz → about Z. Rotating the satellite about its sensor Y axis
         // must tilt the model about Y (roll), not Z.
-        targetRot.pitch = (Number(pitchDeg) || 0) * D2R;
-        targetRot.roll  = (Number(rollDeg)  || 0) * D2R;
-        targetRot.yaw   = (Number(yawDeg)   || 0) * D2R;
+        const p = (Number(pitchDeg) || 0) * D2R;
+        const r = (Number(rollDeg)  || 0) * D2R;
+        const y = (Number(yawDeg)   || 0) * D2R;
+        // Stationary hardware: skip the update entirely so sensor noise
+        // can't visibly jitter the model.
+        if (withinDeadband(p, r, y)) return;
+        targetRot.pitch = p;
+        targetRot.roll  = r;
+        targetRot.yaw   = y;
+        displayed = { pitch: p, roll: r, yaw: y };
         hasAttitude = true;
     }
 
@@ -279,10 +367,11 @@
             setReadout('tlm-roll',  pkt.roll);
             setReadout('tlm-yaw',   pkt.yaw);
         }
-        // Gyro rates: parser field names are gyro_x/gyro_y/gyro_z (°/s)
-        setReadout('tlm-wx', pkt.gyro_x, 2);
-        setReadout('tlm-wy', pkt.gyro_y, 2);
-        setReadout('tlm-wz', pkt.gyro_z, 2);
+        // Gyro rates: prefer the server-scaled °/s fields (raw gyro_x/y/z
+        // are firmware rad/s on this hardware); fall back to raw if absent.
+        setReadout('tlm-wx', pkt.gyro_x_dps !== undefined ? pkt.gyro_x_dps : pkt.gyro_x, 2);
+        setReadout('tlm-wy', pkt.gyro_y_dps !== undefined ? pkt.gyro_y_dps : pkt.gyro_y, 2);
+        setReadout('tlm-wz', pkt.gyro_z_dps !== undefined ? pkt.gyro_z_dps : pkt.gyro_z, 2);
     }
 
     // ── COM18 link status (from the acquisition service) ─────────────
@@ -349,13 +438,14 @@
         );
         camera.lookAt(0, 0, 0);
 
-        // Smoothly drive each axis toward its target with a delta-based
-        // lerp (same logic as the React reference Cube component).
+        // Smoothly drive each axis toward its target with a delta-based,
+        // shortest-arc lerp so the model lands on each live packet's attitude
+        // almost immediately and never takes a spurious long-way spin.
         if (hasAttitude) {
             const t = THREE.MathUtils.clamp(SMOOTHNESS * delta, 0, 1);
-            cube.rotation.x = THREE.MathUtils.lerp(cube.rotation.x, targetRot.pitch, t);
-            cube.rotation.y = THREE.MathUtils.lerp(cube.rotation.y, targetRot.roll,  t);
-            cube.rotation.z = THREE.MathUtils.lerp(cube.rotation.z, targetRot.yaw,   t);
+            cube.rotation.x = lerpAngle(cube.rotation.x, targetRot.pitch, t);
+            cube.rotation.y = lerpAngle(cube.rotation.y, targetRot.roll,  t);
+            cube.rotation.z = lerpAngle(cube.rotation.z, targetRot.yaw,   t);
         }
 
         renderer.render(scene, camera);

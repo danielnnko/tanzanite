@@ -615,6 +615,12 @@ class AcquisitionService:
         pkt["pitch"] = round(pitch, 2)
         pkt["roll"]  = round(roll,  2)
         pkt["yaw"]   = round(yaw,   2)
+        # Gyro in proper °/s for display (raw firmware values are rad/s on
+        # this hardware; the attitude filter scales internally, the UI does
+        # not — without this the ω readouts would be off by 57.3×).
+        pkt["gyro_x_dps"] = round(gx * self._gyro_scale, 2)
+        pkt["gyro_y_dps"] = round(gy * self._gyro_scale, 2)
+        pkt["gyro_z_dps"] = round(gz * self._gyro_scale, 2)
 
         # 5b. Accel-health watchdog: real gravity always reads ~1 g. A resting
         # device far outside that band (dead axis, wrong sensitivity, wrong

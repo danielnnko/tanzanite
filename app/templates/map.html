@@ -172,7 +172,7 @@
 
   <!-- Legend -->
   <div class="map-legend">
-    <span class="item"><span class="lg-dot" style="background:#ffb020;"></span> Ground Station</span>
+    <span class="item"><span style="display:inline-flex;vertical-align:middle;" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4f7cff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a9 9 0 0118 0"/><path d="M12 15v6"/><path d="M8 21h8"/><path d="M12 15L20 6"/><circle cx="12" cy="15" r="1.8" fill="#4f7cff" stroke="none"/></svg></span> Ground Station</span>
     <span class="item"><span class="lg-dot" style="background:#ec4899;"></span> Satellite</span>
     <span class="item"><span class="lg-line"></span> LOS Link</span>
     <span class="item"><span class="lg-track"></span> Ground Track</span>
@@ -230,13 +230,11 @@
   }).addTo(map);
 
   // ── Layers ───────────────────────────────────────────────────────────
-  // Ground station: dot + accuracy halo
+  // Ground station: brand dish marker (same symbol as every other map) + halo
   const gsHalo = L.circleMarker([GS_LAT, GS_LON], {
-    radius: 16, color: '#ffb020', weight: 1, opacity: 0.35, fillOpacity: 0.06,
+    radius: 16, color: TansatGS.color, weight: 1, opacity: 0.35, fillOpacity: 0.06,
   }).addTo(map);
-  const gsMarker = L.circleMarker([GS_LAT, GS_LON], {
-    radius: 7, color: '#ffb020', weight: 2, fillColor: '#ffb020', fillOpacity: 1,
-  }).addTo(map);
+  const gsMarker = L.marker([GS_LAT, GS_LON], { icon: TansatGS.divIcon() }).addTo(map);
   gsMarker.bindPopup(
     `<b>${'{{ station_name | default("Ground Station") }}'}</b><br>` +
     `Lat ${GS_LAT.toFixed(4)}&deg; &middot; Lon ${GS_LON.toFixed(4)}&deg;`

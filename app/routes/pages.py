@@ -4,7 +4,7 @@ app/routes/pages.py
 All HTML page routes (server-rendered shells that fill live via SSE).
 """
 
-from flask import Blueprint, render_template
+from flask import Blueprint, redirect, render_template, url_for
 from flask_login import login_required
 
 from tansat import db as tansat_db
@@ -12,6 +12,13 @@ from tansat import acquisition as acq_svc
 from tansat.auth import require_role
 
 pages_bp = Blueprint("pages", __name__)
+
+
+@pages_bp.route("/favicon.ico")
+def favicon_ico():
+    """Legacy favicon path: browsers still request /favicon.ico when no
+    explicit <link rel="icon"> matches — redirect to the SVG icon."""
+    return redirect(url_for("static", filename="favicon.svg"), code=302)
 
 
 def _svc():

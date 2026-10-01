@@ -12,6 +12,7 @@
         })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <title>GroundStation — {{ title|default('') }}</title>
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -221,6 +222,9 @@
     </div>
 
     <!-- Scripts -->
+    <!-- Shared ground-station dish symbol (all maps) — must load before
+         page scripts that build markers. -->
+    <script src="/static/js/gs-icon.js"></script>
     <script src="/static/js/stream.js"></script>
     <script>
         // Theme toggle — swaps SVG icons via data-theme. Initial value is

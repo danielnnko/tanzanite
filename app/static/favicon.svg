@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- TANZANITESAT ground station favicon — echoes the sidebar brand dish:
+       parabolic dish dome, stand, and signal beam to the satellite. -->
+  <rect width="24" height="24" rx="5" fill="#0b0d13"/>
+  <g fill="none" stroke="#4f7cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 15a9 9 0 0118 0"/>
+    <path d="M12 15v6"/>
+    <path d="M8 21h8"/>
+    <path d="M12 15L20 6"/>
+  </g>
+  <circle cx="12" cy="15" r="1.8" fill="#4f7cff" stroke="none"/>
+</svg>

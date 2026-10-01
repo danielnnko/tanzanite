@@ -58,6 +58,8 @@ DT_MIN, DT_MAX = 0.005, 30.0
 # leaves that band and the accel-derived pitch/roll is noise — blending it in
 # makes the attitude crawl toward garbage angles after every rotation.
 ACCEL_NORM_TOL = 0.35        # |a| must be within ±0.35 g of 1 g to trust accel
+ACCEL_REST_BAND_FRAC = 0.15  # rest-baseline band: |a| within ±15% of rest
+ACCEL_BASELINE_PACKETS = 5   # calm packets needed to (re)learn the rest |a|
 MOTION_GYRO_THRESHOLD = 0.15  # °/s (post-scale): above this the body is rotating
 # Packet interval the alpha convergence table assumes (spec's 50 Hz telemetry).
 # The accel blend is scaled by dt/ATTITUDE_DT_REF so convergence takes the same
@@ -71,15 +73,25 @@ ATTITUDE_DT_REF = 0.02
 # phantom rotation when the satellite parks. The filter estimates the bias
 # from still samples and subtracts it before integrating.
 BIAS_WARMUP_SAMPLES   = 6    # packets to average before integrating gyro
-BIAS_WARMUP_MAX_RATE  = 5.0   # °/s post-scale: still enough for warmup. Must sit
-                              # ABOVE the gyro's own bias (~1.1–1.7 °/s observed)
-                              # but far below any hand rotation (≥20 °/s).
+BIAS_WARMUP_MAX_RATE  = 12.0  # °/s post-scale: still enough for warmup. Must sit
+                              # ABOVE the gyro's own bias — observed ~1.1–1.7 °/s
+                              # on the bench unit but ~7.4 °/s on the flight unit
+                              # (-0.13 rad/s firmware × 57.2958) — and far below
+                              # any hand rotation (~57 °/s observed).
 BIAS_WARMUP_MAX_ATTEMPTS = 30 # give up after this many packets: integrate
                               # uncalibrated (bias 0) rather than freeze forever
 BIAS_EMA_ALPHA        = 0.02  # EMA weight at the 50 Hz reference rate; rate-
                               # normalized at runtime (see _bias_ema_alpha)
 BIAS_EMA_MAX_STEP     = 0.25  # cap: one packet gap can never adapt bias fully
 BIAS_HOLDOUT_SECONDS  = 5.0   # skip bias updates this long after motion stops
+
+# ── Frozen-buffer veto (gyro-vs-accel contradiction) ─────────────────
+# Fires the moment gx or gy claims rotation while the accelerometer still
+# reads the rest vector — impossible physics for pitch/roll, and at this
+# packet rate a single integrated phantom packet is ~165 deg of error
+# (frozen -1.09 rad/s × 3 s). See AttitudeFilter.update for the per-axis
+# reasoning that keeps genuine yaw spins integrating.
+GYRO_CONTRADICTION_PACKETS = 1  # kept for ops reference/diagnostics
 
 class AttitudeFilter:
     def __init__(self, alpha: float = ATTITUDE_ALPHA,
@@ -103,6 +115,18 @@ class AttitudeFilter:
         self.bias_ready = False           # True once warmup produced a bias
         self._last_motion_ts = None       # monotonic-ish timestamp (s of integration time)
         self._motion_time = 0.0           # cumulative dt while gyro is active
+        # ── Accel baseline (rest-vector calibration) ─────────────────
+        # Real hardware may deliver accel in a non-1g scale (observed: rest
+        # vector (5.75, -22.09, 19.22) → |a| ≈ 29.9 "g"). The motion gate
+        # therefore compares |a| against the LEARNED REST MAGNITUDE, not an
+        # absolute 1 g — this makes the gate scale-invariant and re-arms the
+        # accelerometer as a usable gravity reference.
+        self._accel_rest_mag = None       # learned |a| while parked (None = unknown)
+        self._accel_rest_axis = None      # learned gravity direction (unit vector)
+        self._accel_still_run = 0         # consecutive accel-calm packets
+        # ── Stale-gyro detector state (kept for diagnostics only) ────
+        self._last_raw_gyro = None        # previous raw (scaled) tuple
+        self._contradiction_run = 0       # consecutive gyro-vs-accel contradictions
 
     def _gyro_still(self, gx, gy, gz) -> bool:
         """True if all raw (scaled) gyro axes are below the still threshold."""
@@ -135,6 +159,43 @@ class AttitudeFilter:
         gz = gz * self.gyro_scale
         dt = max(DT_MIN, min(DT_MAX, dt))
         pitch_acc, roll_acc = accel_orientation(ax, ay, az)
+
+        # ── Accel rest-baseline learning (scale-invariant motion gate) ──
+        # The rest magnitude+direction is learned ONLY while the gyro also
+        # reports stillness — gravity is then the only specific force. This
+        # prevents a sustained handling shake (constant in lab feeds) from
+        # being mis-learned as the rest vector.
+        a_norm = sqrt(ax * ax + ay * ay + az * az)
+        band = (ACCEL_REST_BAND_FRAC * self._accel_rest_mag
+                if self._accel_rest_mag is not None else None)
+        gyro_still_for_baseline = self._gyro_still(gx, gy, gz)
+        if (a_norm > 1e-6 and gyro_still_for_baseline
+                and (band is None
+                     or abs(a_norm - self._accel_rest_mag) <= band)):
+            self._accel_still_run += 1
+        else:
+            self._accel_still_run = 0
+        if (self._accel_still_run >= ACCEL_BASELINE_PACKETS
+                and (band is None
+                     or abs(a_norm - self._accel_rest_mag) <= band)):
+            self._accel_rest_mag = a_norm
+            inv = 1.0 / a_norm
+            self._accel_rest_axis = (ax * inv, ay * inv, az * inv)
+        # accel "looks like gravity": close to the learned rest magnitude
+        # AND the direction is stable vs the learned rest axis (dot > 0.9).
+        if self._accel_rest_mag is not None:
+            band = ACCEL_REST_BAND_FRAC * self._accel_rest_mag
+            mag_ok = abs(a_norm - self._accel_rest_mag) <= band
+            inv = 1.0 / a_norm if a_norm > 1e-6 else 0.0
+            dot = (ax * inv * self._accel_rest_axis[0]
+                   + ay * inv * self._accel_rest_axis[1]
+                   + az * inv * self._accel_rest_axis[2]) if inv else 0.0
+            dir_ok = dot > 0.9
+            accel_invalid = not (mag_ok and dir_ok)
+        else:
+            # Fallback until the baseline exists: the old absolute 1 g rule
+            # (sane for correctly scaled sensors; harmless otherwise).
+            accel_invalid = abs(a_norm - 1.0) > ACCEL_NORM_TOL
 
         # ── Bias warmup: average the first still samples to seed the bias.
         # Until calibrated (or the attempt cap gives up), track accel only so
@@ -178,25 +239,55 @@ class AttitudeFilter:
             self._bias = [b + a * (r - b)
                           for b, r in zip(self._bias, raw)]
 
+        # ── Stale-gyro (frozen-sample) tracking (diagnostics only) ──
+        # NOT a pose gate: with the accel rest-baseline fix, the
+        # complementary blend re-anchors pitch/roll within a few packets
+        # and the parked bias EMA absorbs a frozen gyro — faster and
+        # safer than bit-equality heuristics, which also fire on
+        # genuinely steady rotations.
+        self._last_raw_gyro = raw
+
         # Remove estimated bias, then apply the small-signal dead-band.
         gx = apply_gyro_deadband(raw[0] - self._bias[0])
         gy = apply_gyro_deadband(raw[1] - self._bias[1])
         gz = apply_gyro_deadband(raw[2] - self._bias[2])
 
-        a_norm = sqrt(ax * ax + ay * ay + az * az)
-        accel_invalid = abs(a_norm - 1.0) > ACCEL_NORM_TOL
-        gyro_active   = max(abs(gx), abs(gy), abs(gz)) > MOTION_GYRO_THRESHOLD
+        gyro_active = max(abs(gx), abs(gy), abs(gz)) > MOTION_GYRO_THRESHOLD
 
-        # Motion gate: coast on gyro integration while the accel reference is
-        # implausible (|a| outside the 1 g band) or the body is rotating. Once
-        # the device rests on a plausible gravity vector, resume the blend so
-        # the attitude re-anchors instead of drifting.
-        if accel_invalid or gyro_active:
+        # ── Frozen-buffer veto (gyro-vs-accel contradiction) ─────────────
+        # A REAL pitch/roll rotation swings the gravity vector through the
+        # accelerometer within one packet gap — accel immediately leaves the
+        # rest baseline. A frozen I2C buffer (observed: constant (-1.09,
+        # 0.05, -0.96) rad/s for 90 s while parked => phantom -62 deg/s)
+        # does NOT move accel. So "gx or gy claims rotation while accel
+        # still reads rest" is impossible physics: the whole gyro sample is
+        # stale — veto ALL axes for that packet (a frozen buffer corrupts
+        # gz too).
+        #
+        # Per-axis nuance: a REAL yaw spin about the gravity axis leaves
+        # accel untouched by definition, and a genuinely rotating body
+        # shows near-zero gx/gy. Therefore: gz-only activity with a valid
+        # accel is treated as a real yaw rotation and integrated; gx/gy
+        # activity with a valid accel is declared frozen.
+        gyro_active_gxgy = max(abs(gx), abs(gy)) > MOTION_GYRO_THRESHOLD
+        buffer_frozen = gyro_active_gxgy and not accel_invalid
+        self._contradiction_run = self._contradiction_run + 1 if buffer_frozen else 0
+
+        if buffer_frozen:
+            # Stale sample: hold the pose (blend to the trusted accel — a
+            # no-op while accel is static — and never integrate yaw).
+            self._blend_to_accel(pitch_acc, roll_acc, 0.0, 0.0, dt)
+        elif accel_invalid or gyro_active:
+            # Coast on gyro integration while the accel reference is
+            # implausible (|a| off the rest baseline or direction changed)
+            # or the body is rotating. Yaw always integrates: accel cannot
+            # observe rotation about the gravity axis.
             self.pitch = _wrap180(self.pitch + gx * dt)
             self.roll  = _wrap180(self.roll  + gy * dt)
         else:
             self._blend_to_accel(pitch_acc, roll_acc, gx, gy, dt)
-        self.yaw = _wrap180(self.yaw + gz * dt)
+        if not buffer_frozen:
+            self.yaw = _wrap180(self.yaw + gz * dt)
         return self.pitch, self.roll, self.yaw
 
     def reset(self):

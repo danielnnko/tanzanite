@@ -264,7 +264,8 @@ def logs_download(name: str):
     path = _data_dir() / name
     if not path.exists():
         abort(404)
-    return send_file(path, as_attachment=True, download_name=name)
+    return send_file(path, as_attachment=True, download_name=name,
+                     mimetype="text/csv")
 
 
 @api_bp.route("/logs/<name>.preview")

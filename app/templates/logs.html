@@ -33,9 +33,18 @@
 </div>
 
 <div class="modal-overlay" id="preview-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: center;">
-    <div class="modal-box card" style="width: 90%; max-width: 800px;">
-        <div class="panel-title" style="margin-bottom:10px;">File Preview</div>
-        <div class="console-box" id="preview-content" style="max-height: 60vh; white-space: pre-wrap; margin-bottom: 14px;"></div>
+    <div class="modal-box card" style="width: 90%; max-width: 1100px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <div class="panel-title">File Preview</div>
+            <span id="preview-meta" class="text-muted" style="font-size:11px;"></span>
+        </div>
+        <div id="preview-filename" class="mono text-muted" style="font-size:11px; margin-bottom:10px; word-break:break-all;"></div>
+        <div style="max-height: 60vh; overflow: auto; border:1px solid var(--border); border-radius:7px; margin-bottom: 14px;">
+            <table class="table data-table-sm" id="preview-table" style="min-width: max-content;">
+                <thead></thead>
+                <tbody></tbody>
+            </table>
+        </div>
         <button class="btn btn-primary" onclick="document.getElementById('preview-modal').style.display = 'none';">Close</button>
     </div>
 </div>
@@ -99,9 +108,62 @@
         }).catch(e => console.error('Error loading logs:', e));
     }
 
+    // ── Preview modal: render the CSV as a table ──────────────────
+    // Escape cell text before it goes into innerHTML (defence in depth).
+    function escHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[c]);
+    }
+
+    // RFC-4180-style CSV line splitter: handles "quoted, fields" and
+    // ""-escaped quotes so telemetry rows with embedded commas survive.
+    function parseCsvLine(line) {
+        const out = [];
+        let cur = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (line[i + 1] === '"') { cur += '"'; i++; }
+                    else inQuotes = false;
+                } else cur += ch;
+            } else if (ch === '"') {
+                inQuotes = true;
+            } else if (ch === ',') {
+                out.push(cur); cur = '';
+            } else {
+                cur += ch;
+            }
+        }
+        out.push(cur);
+        return out;
+    }
+
     function previewLog(filename) {
         fetch(`/api/logs/${encodeURIComponent(filename)}.preview`).then(r => r.json()).then(resp => {
-            document.getElementById('preview-content').textContent = (resp.lines || []).join('\n');
+            const lines = resp.lines || [];
+            const thead = document.querySelector('#preview-table thead');
+            const tbody = document.querySelector('#preview-table tbody');
+            document.getElementById('preview-filename').textContent = filename;
+
+            if (lines.length === 0) {
+                thead.innerHTML = '';
+                tbody.innerHTML = '<tr><td class="text-muted">File is empty.</td></tr>';
+                document.getElementById('preview-meta').textContent = '';
+            } else {
+                const headers = parseCsvLine(lines[0]);
+                const rows = lines.slice(1).map(parseCsvLine);
+                // Sticky header keeps column names visible while scrolling.
+                thead.innerHTML = '<tr>' + headers.map(h =>
+                    `<th style="position:sticky; top:0; background:var(--card); z-index:1;">${escHtml(h)}</th>`
+                ).join('') + '</tr>';
+                tbody.innerHTML = rows.map(cells => '<tr>' + headers.map((_, i) =>
+                    `<td class="mono">${escHtml(cells[i] ?? '')}</td>`
+                ).join('') + '</tr>').join('');
+                document.getElementById('preview-meta').textContent =
+                    `Header + first ${rows.length} data rows`;
+            }
             document.getElementById('preview-modal').style.display = 'flex';
         }).catch(e => console.error('Error previewing log:', e));
     }

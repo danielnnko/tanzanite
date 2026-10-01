@@ -169,7 +169,7 @@
 
   // Series / marker colors (§4 exact values)
   const COLOR_SATELLITE   = 0xec4899;  // azimuth series color
-  const COLOR_GS          = 0xffb020;  // warning color
+  const COLOR_GS          = '#4f7cff'; // brand accent — GS symbol color on every map
   const COLOR_LOS_OK      = 0x00e6a0;  // success color
   const COLOR_LOS_NO      = 0x2a2d3d;  // border color (dimmed)
   const COLOR_TRAIL       = 0xec4899;
@@ -331,12 +331,16 @@
     satMarker.add(new THREE.Mesh(satGlowGeo, satGlowMat));
 
     // ── Ground-station marker ───────────────────────────────────
-    // Also a child of the Earth mesh — rotates rigidly with the surface
+    // Same brand-dish symbol as the Leaflet maps (shared TansatGS helper),
+    // drawn as a billboard sprite so it always faces the camera. Still a
+    // child of the Earth mesh (rotates rigidly with the surface) and
+    // depth-tested, so it hides behind the globe on the far side, exactly
+    // like the old sphere. updateLOS() uses its world position unchanged.
     const gsPos = surfacePos(GS_LAT, GS_LON);
-    const gsGeo = new THREE.SphereGeometry(0.6, 10, 10);
-    const gsMat = new THREE.MeshBasicMaterial({ color: COLOR_GS });
-    gsMarker = new THREE.Mesh(gsGeo, gsMat);
-    gsMarker.position.copy(gsPos);
+    gsMarker = TansatGS.sprite({ color: COLOR_GS, scale: 5 });
+    gsMarker.position.copy(
+      gsPos.normalize().multiplyScalar(EARTH_RADIUS_SCENE + 2.8),
+    );
     earthMesh.add(gsMarker);
 
     // ── Trail (orbital) ─────────────────────────────────────────
