@@ -1,3 +1,4 @@
+from collections import deque
 from math import radians, degrees, atan2, sqrt, cos, sin, asin
 
 EARTH_RADIUS_M = 6_371_000.0
@@ -85,6 +86,38 @@ BIAS_EMA_ALPHA        = 0.02  # EMA weight at the 50 Hz reference rate; rate-
 BIAS_EMA_MAX_STEP     = 0.25  # cap: one packet gap can never adapt bias fully
 BIAS_HOLDOUT_SECONDS  = 5.0   # skip bias updates this long after motion stops
 
+# ── Frozen-packet glitch override (ground-station MPU6050 lockup fix) ──
+# When the CubeSat is rotated very fast, the onboard MPU6050 FIFO buffer/I2C
+# bus can lock up: the firmware keeps re-broadcasting the SAME gyro sample
+# (observed frozen at (0.97, -1.06) and at (-1.09, 0.05, -0.96) rad/s) while
+# the body is already stationary on the bench. Integrating that static
+# "rate" is the Gyroscope-Runaway defect. Firmware cannot be reflashed, so
+# the ground station must detect it here, at packet-processing time.
+# Real MEMS stillness always carries floating decimal micro-noise, so N
+# EXACTLY identical consecutive samples is a locked buffer, not a measurement.
+FROZEN_GYRO_PACKETS = 3       # identical consecutive packets → stream FROZEN
+# A frozen dump only needs suppressing when the value could actually move the
+# pose. Genuine stillness can also quantize to identical samples at firmware
+# precision (observed: a parked gyro repeats (0.02, 0.00, -0.03) for packet
+# runs) — those are harmless, and the bias estimator MUST keep seeing them
+# (it calibrates on them), so only LARGE frozen values are a glitch. The
+# ceiling is the stillness threshold: no parked sensor legitimately reads
+# above it, while real rotation never repeats bit-exactly for 3 packets.
+FROZEN_GLITCH_MIN_RATE = BIAS_WARMUP_MAX_RATE   # °/s post-scale
+
+# ── Accelerometer gravity fallback (static-accel veto) ──────────────
+# During the lockup the accelerometer keeps reporting the true resting
+# gravity vector (near-zero variance between packets) while the gyro claims
+# a violent rotation — impossible physics. When the accel window is static
+# and the (cleaned) gyro still claims rotation, the gyro's fusion weight
+# drops to 0 and pitch/roll are taken PURELY from the accelerometer gravity
+# vectors. Yaw has no accel anchor (rotation about the gravity axis is
+# invisible to the accelerometer), so gz keeps integrating — a real yaw spin
+# must still track; a glitched gz is already forced to 0 by the detector.
+ACCEL_STATIC_WINDOW   = 4      # packets in the accel variance window
+ACCEL_STATIC_REL_TOL  = 0.10   # max component drift ≤ 10% of mean |a|
+ACCEL_STATIC_MIN_NORM = 1e-3   # below this |a| there is no usable gravity vector
+
 # ── Frozen-buffer veto (gyro-vs-accel contradiction) ─────────────────
 # Fires the moment gx or gy claims rotation while the accelerometer still
 # reads the rest vector — impossible physics for pitch/roll, and at this
@@ -127,6 +160,14 @@ class AttitudeFilter:
         # ── Stale-gyro detector state (kept for diagnostics only) ────
         self._last_raw_gyro = None        # previous raw (scaled) tuple
         self._contradiction_run = 0       # consecutive gyro-vs-accel contradictions
+        # ── Frozen-packet glitch detector (MPU6050 I2C/FIFO lockup) ──
+        self._prev_gyro = None            # previous scaled (gx, gy, gz) triple
+        self._gyro_repeat_run = 0         # consecutive exactly-identical packets (−1)
+        self.frozen_glitch = False        # True while a frozen dump is suppressed
+        self.frozen_streak = 0            # identical-packet streak length (diagnostic)
+        # ── Accelerometer static window (gravity-fallback gate) ──────
+        self._accel_window = deque(maxlen=ACCEL_STATIC_WINDOW)
+        self.gravity_fallback = False     # True when pitch/roll came purely from accel
 
     def _gyro_still(self, gx, gy, gz) -> bool:
         """True if all raw (scaled) gyro axes are below the still threshold."""
@@ -144,6 +185,23 @@ class AttitudeFilter:
         self.pitch = _wrap180(keep * (self.pitch + gx * dt) + blend * pitch_acc)
         self.roll  = _wrap180(keep * (self.roll  + gy * dt) + blend * roll_acc)
 
+    def _accel_window_is_static(self) -> bool:
+        """True when the accelerometer window shows near-zero variance (the
+        body is resting flat and gravity is a valid reference). Compares every
+        window sample against the newest sample with an L∞ component check,
+        relative to the mean |a| so it is scale-invariant."""
+        w = self._accel_window
+        if len(w) < ACCEL_STATIC_WINDOW:
+            return False
+        mags = [sqrt(x * x + y * y + z * z) for (x, y, z) in w]
+        mean_mag = sum(mags) / len(mags)
+        if mean_mag < ACCEL_STATIC_MIN_NORM:
+            return False          # zero/degenerate vector: no gravity reference
+        tol = ACCEL_STATIC_REL_TOL * mean_mag
+        lx, ly, lz = w[-1]
+        return all(max(abs(x - lx), abs(y - ly), abs(z - lz)) <= tol
+                   for (x, y, z) in w)
+
     def _bias_ema_alpha(self, dt) -> float:
         """EMA weight for this packet's dt: converges in the same WALL-CLOCK
         time at any packet rate (at 50 Hz it equals BIAS_EMA_ALPHA), capped
@@ -160,6 +218,36 @@ class AttitudeFilter:
         dt = max(DT_MIN, min(DT_MAX, dt))
         pitch_acc, roll_acc = accel_orientation(ax, ay, az)
 
+        # ── Frozen-packet glitch detector (override #1) ──────────────────
+        # Track the incoming gyro triple: if it stays EXACTLY identical (down
+        # to the last decimal) for FROZEN_GYRO_PACKETS consecutive packets,
+        # the I2C/FIFO buffer has locked up and the values are a stale dump,
+        # not a measurement. A real parked MEMS gyro always shows micro-noise;
+        # a real rotation never repeats bit-exactly at this packet cadence.
+        triple = (gx, gy, gz)
+        if triple == self._prev_gyro:
+            self._gyro_repeat_run += 1
+        else:
+            self._gyro_repeat_run = 0
+        self._prev_gyro = triple
+        self.frozen_streak = self._gyro_repeat_run + 1
+        frozen_glitch = (self._gyro_repeat_run >= FROZEN_GYRO_PACKETS - 1
+                         and max(abs(gx), abs(gy), abs(gz)) > FROZEN_GLITCH_MIN_RATE)
+        self.frozen_glitch = frozen_glitch
+        if frozen_glitch:
+            # Override the incoming gyro to exactly 0.0 BEFORE anything else
+            # (warmup averaging, bias estimation, pose integration) consumes
+            # it — this instantly freezes the angular-integration loop.
+            gx = gy = gz = 0.0
+
+        # ── Accelerometer static window (gravity-fallback gate) ─────────
+        # Variance is measured over a short window in RAW firmware units and
+        # compared RELATIVE to the mean magnitude, so the gate is invariant
+        # to the sensor's unit scale (1 g hardware vs the mis-scaled 29.9
+        # "g" bench unit behave identically).
+        self._accel_window.append((ax, ay, az))
+        accel_static = self._accel_window_is_static()
+
         # ── Accel rest-baseline learning (scale-invariant motion gate) ──
         # The rest magnitude+direction is learned ONLY while the gyro also
         # reports stillness — gravity is then the only specific force. This
@@ -168,7 +256,12 @@ class AttitudeFilter:
         a_norm = sqrt(ax * ax + ay * ay + az * az)
         band = (ACCEL_REST_BAND_FRAC * self._accel_rest_mag
                 if self._accel_rest_mag is not None else None)
-        gyro_still_for_baseline = self._gyro_still(gx, gy, gz)
+        # A frozen dump proves nothing about the body, so it must not be used
+        # to learn the rest baseline either — the zeroed gyro would otherwise
+        # look "still" and a garbage accel could be mis-learned as gravity,
+        # permanently poisoning the motion gate.
+        gyro_still_for_baseline = (self._gyro_still(gx, gy, gz)
+                                   and not frozen_glitch)
         if (a_norm > 1e-6 and gyro_still_for_baseline
                 and (band is None
                      or abs(a_norm - self._accel_rest_mag) <= band)):
@@ -201,13 +294,16 @@ class AttitudeFilter:
         # Until calibrated (or the attempt cap gives up), track accel only so
         # the bias never leaks into the pose.
         if not self.bias_ready and self._warmup_attempts < BIAS_WARMUP_MAX_ATTEMPTS:
-            self._warmup_attempts += 1
-            if self._gyro_still(gx, gy, gz):
-                self._warmup.append([gx, gy, gz])
-                if len(self._warmup) >= BIAS_WARMUP_SAMPLES:
-                    self._bias = [sum(c) / len(self._warmup)
-                                  for c in zip(*self._warmup)]
-                    self.bias_ready = True
+            # A frozen dump is not a calibration sample: skip accumulation
+            # (the pose below is still anchored to the accel reference).
+            if not frozen_glitch:
+                self._warmup_attempts += 1
+                if self._gyro_still(gx, gy, gz):
+                    self._warmup.append([gx, gy, gz])
+                    if len(self._warmup) >= BIAS_WARMUP_SAMPLES:
+                        self._bias = [sum(c) / len(self._warmup)
+                                      for c in zip(*self._warmup)]
+                        self.bias_ready = True
             if self._first:
                 self.pitch = pitch_acc
                 self.roll  = roll_acc
@@ -230,7 +326,9 @@ class AttitudeFilter:
         # after genuine (raw) motion still protects against absorbing a real
         # rotation's decaying tail into the bias.
         self._motion_time += dt
-        if not self._gyro_still(*raw):
+        if frozen_glitch:
+            pass  # stale dump: never absorb it into the bias estimate
+        elif not self._gyro_still(*raw):
             self._last_motion_ts = self._motion_time
         elif (self._motion_time - (self._last_motion_ts or 0.0)
               >= BIAS_HOLDOUT_SECONDS):
@@ -240,17 +338,23 @@ class AttitudeFilter:
                           for b, r in zip(self._bias, raw)]
 
         # ── Stale-gyro (frozen-sample) tracking (diagnostics only) ──
-        # NOT a pose gate: with the accel rest-baseline fix, the
-        # complementary blend re-anchors pitch/roll within a few packets
-        # and the parked bias EMA absorbs a frozen gyro — faster and
-        # safer than bit-equality heuristics, which also fire on
-        # genuinely steady rotations.
+        # NOT a pose gate by itself anymore: defense-in-depth is layered —
+        # 1) the frozen-packet detector above zeroes exactly-repeating large
+        #    dumps before they reach the pose,
+        # 2) the gravity fallback re-anchors pitch/roll to the accelerometer
+        #    whenever gyro activity contradicts a static accel window,
+        # 3) the complementary blend plus the parked bias EMA clean up any
+        #    residual. This counter remains for ops diagnostics only.
         self._last_raw_gyro = raw
 
         # Remove estimated bias, then apply the small-signal dead-band.
         gx = apply_gyro_deadband(raw[0] - self._bias[0])
         gy = apply_gyro_deadband(raw[1] - self._bias[1])
         gz = apply_gyro_deadband(raw[2] - self._bias[2])
+        if frozen_glitch:
+            # Re-zero AFTER bias removal too: a stale bias estimate must not
+            # leak a phantom residual (−bias) back into the pose.
+            gx = gy = gz = 0.0
 
         gyro_active = max(abs(gx), abs(gy), abs(gz)) > MOTION_GYRO_THRESHOLD
 
@@ -273,7 +377,22 @@ class AttitudeFilter:
         buffer_frozen = gyro_active_gxgy and not accel_invalid
         self._contradiction_run = self._contradiction_run + 1 if buffer_frozen else 0
 
-        if buffer_frozen:
+        # ── Gravity fallback (override #2) ───────────────────────────────
+        # Gyro claims rotation while the accelerometer window is static
+        # (near-zero variance = body resting flat): impossible physics.
+        # Cut the gyro's fusion weight to 0 — pitch/roll come PURELY from the
+        # accelerometer gravity vectors, which also re-anchors any pose that
+        # a pre-detection runaway already corrupted. Yaw still integrates the
+        # cleaned gz: a genuine spin about the gravity axis leaves accel
+        # static BY DEFINITION, and gz is the only yaw reference there is
+        # (a glitched packet's gz is already 0, so yaw holds there).
+        gravity_fallback = accel_static and (frozen_glitch or gyro_active)
+        self.gravity_fallback = gravity_fallback
+
+        if gravity_fallback:
+            self.pitch = _wrap180(pitch_acc)
+            self.roll  = _wrap180(roll_acc)
+        elif buffer_frozen:
             # Stale sample: hold the pose (blend to the trusted accel — a
             # no-op while accel is static — and never integrate yaw).
             self._blend_to_accel(pitch_acc, roll_acc, 0.0, 0.0, dt)

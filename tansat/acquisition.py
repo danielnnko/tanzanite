@@ -296,6 +296,7 @@ class AcquisitionService:
         self._gps_filter       = physics.GpsFilter()
         self._range_rate_filter = physics.RangeRateFilter()
         self._accel_warned = False   # accel-health watchdog latch (per connection)
+        self._frozen_state = False   # frozen-gyro glitch latch (for transition logs)
 
         # Session logger
         self._session_log: Optional[SessionLogger] = None
@@ -388,6 +389,7 @@ class AcquisitionService:
             self._gps_filter       = physics.GpsFilter()
             self._range_rate_filter = physics.RangeRateFilter()
             self._accel_warned = False
+            self._frozen_state = False
             tlm_parser.reset_stats()
             self._image_buffer = {}
 
@@ -621,6 +623,21 @@ class AcquisitionService:
         pkt["gyro_x_dps"] = round(gx * self._gyro_scale, 2)
         pkt["gyro_y_dps"] = round(gy * self._gyro_scale, 2)
         pkt["gyro_z_dps"] = round(gz * self._gyro_scale, 2)
+
+        # 5a. Frozen-gyro glitch transitions: log once on engage (with the
+        # offending raw sample) and once on clear, so the ops console shows
+        # exactly when the MPU6050 I2C/FIFO lockup began and ended.
+        att = self._attitude_filter
+        if att.frozen_glitch and not self._frozen_state:
+            logger.warning(
+                "GYRO FROZEN-SAMPLE GLITCH: (gyro_x, gyro_y, gyro_z) = "
+                "(%.3f, %.3f, %.3f) identical for %d packets — values "
+                "suppressed (integration frozen, pitch/roll on accel).",
+                gx, gy, gz, att.frozen_streak,
+            )
+        elif not att.frozen_glitch and self._frozen_state:
+            logger.info("Gyro stream unfrozen — normal integration resumed.")
+        self._frozen_state = att.frozen_glitch
 
         # 5b. Accel-health watchdog: real gravity always reads ~1 g. A resting
         # device far outside that band (dead axis, wrong sensitivity, wrong

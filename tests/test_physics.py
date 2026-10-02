@@ -272,3 +272,98 @@ def test_real_rotation_still_integrates_with_miscaled_accel():
         p, r, y = f.update(S * sin(radians(theta)), -S, S * cos(radians(theta)),
                            30/57.2958, 0.0, 0.0, 3.0)
     assert abs(p) > 60.0, f"real rotation suppressed: pitch={p}"
+
+
+# ── Frozen-packet glitch override (MPU6050 I2C/FIFO lockup fix) ───────
+
+def test_frozen_gyro_yz_dump_does_not_run_away():
+    """Regression for the reported bench fault: after a fast rotation the
+    MPU6050 I2C/FIFO locks up and re-broadcasts the SAME sample — observed
+    gyro_y frozen at 0.97 and gyro_z at -1.06 (rad/s firmware) — while the
+    CubeSat sits stationary. The old filter integrated ~55 deg/s of phantom
+    rotation forever; the frozen-packet detector must suppress the dump and
+    hold the pose."""
+    f = AttitudeFilter(gyro_scale=57.2958)
+    for _ in range(12):                              # warmup, parked flat
+        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 3.0)
+    p0, r0, y0 = f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 3.0)
+    FROZEN = (0.0, 0.97, -1.06)                      # the reported lockup dump
+    for _ in range(20):                              # ~1 min of frozen packets
+        p, r, y = f.update(0.0, 0.0, 1.0, *FROZEN, 3.0)
+    assert f.frozen_glitch is True, "glitch was never flagged"
+    assert abs(p - p0) < 5.0, f"pitch ran away: {p0} -> {p}"
+    assert abs(r - r0) < 5.0, f"roll ran away: {r0} -> {r}"
+    def wrap_diff(a, b):
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+    assert wrap_diff(y, y0) < 5.0, f"yaw spun: {y0} -> {y}"
+
+
+def test_frozen_glitch_reanchors_pose_to_accel_reference():
+    """Full runaway-then-recovery story: a pre-detection runaway (garbage
+    accel + varying high gyro) spins the pose, then the sensor locks up —
+    gyro frozen at the reported (0, 0.97, -1.06) rad/s dump while the
+    accelerometer returns to its flat resting state. The detector must
+    freeze the integration and the gravity fallback must pull pitch/roll
+    back to the accelerometer's ground truth."""
+    f = AttitudeFilter(gyro_scale=57.2958)
+    for _ in range(12):                              # warmup, parked flat
+        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 3.0)
+    # Runaway phase: garbage accel (baseline invalid) + VARYING high rates
+    # (no exact repeats, so the frozen detector is not armed yet).
+    garbage = [(6.0, 3.0, 2.0), (12.0, 8.0, 3.0), (20.0, 15.0, 5.0)]
+    rates = [(55.1, 0.3, 1.1), (56.0, -0.2, 0.8), (54.7, 0.4, 1.3)]
+    for i in range(6):
+        f.update(*garbage[i % 3], *rates[i % 3], 3.0)
+    spun = f.update(*garbage[0], *rates[0], 3.0)
+    assert abs(spun[0]) > 30.0, "pose never ran away — recovery proves nothing"
+    # Glitch phase: accel back at rest, gyro locked on the reported dump.
+    for _ in range(8):
+        p, r, y = f.update(0.0, 0.0, 1.0, 0.0, 0.97, -1.06, 3.0)
+    assert f.frozen_glitch is True, "glitch was never flagged"
+    # Pitch/roll re-anchored to the flat gravity reference; yaw stopped.
+    assert abs(p) < 5.0, f"pitch did not re-anchor: {p}"
+    assert abs(r) < 5.0, f"roll did not re-anchor: {r}"
+    y_last = y
+    p, r, y = f.update(0.0, 0.0, 1.0, 0.0, 0.97, -1.06, 3.0)
+    def wrap_diff(a, b):
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+    assert wrap_diff(y, y_last) < 0.5, f"yaw still drifting: {y_last} -> {y}"
+
+
+def test_gravity_fallback_vetoes_gyro_against_static_accel():
+    """Override #2 alone: the gyro claims a violent rotation (values VARY,
+    so the exact-repeat detector never fires) while the accelerometer window
+    is static — the satellite is resting flat. The gyro's fusion weight must
+    drop to 0 and pitch/roll must come purely from the gravity vectors
+    instead of integrating the phantom rate."""
+    f = AttitudeFilter(gyro_scale=57.2958)
+    for _ in range(12):                              # warmup, parked flat
+        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 3.0)
+    rates = [(55.1, 0.0, 0.0), (54.9, 0.0, 0.0), (55.3, 0.0, 0.0)]
+    for i in range(9):                               # 27 s of phantom rotation
+        p, r, y = f.update(0.0, 0.0, 1.0, *rates[i % 3], 3.0)
+    assert f.frozen_glitch is False, "values vary — must not be flagged frozen"
+    assert abs(p) < 5.0, f"phantom rotation integrated: pitch={p}"
+    assert abs(r) < 5.0, f"phantom rotation integrated: roll={r}"
+    def wrap_diff(a, b):
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+    assert wrap_diff(y, 0.0) < 5.0, f"yaw leaked from a pitch-rate claim: {y}"
+
+
+def test_real_yaw_spin_still_integrates_with_static_accel():
+    """A genuine spin about the gravity axis leaves the accelerometer
+    static BY DEFINITION — the gravity fallback must snap pitch/roll to the
+    (correct) accel reference WITHOUT suppressing yaw integration, or real
+    yaw manoeuvres would become invisible."""
+    f = AttitudeFilter(gyro_scale=57.2958)
+    for _ in range(12):                              # warmup, parked flat
+        f.update(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    gz_rates = [30.0, 30.2, 29.8]                    # varying → never "frozen"
+    for i in range(5):                               # 5 s at ~30 deg/s
+        p, r, y = f.update(0.0, 0.0, 1.0, 0.0, 0.0,
+                           gz_rates[i % 3] / 57.2958, 1.0)
+    assert f.frozen_glitch is False
+    assert abs(p) < 5.0 and abs(r) < 5.0, (p, r)     # accel anchor kept
+    def wrap_diff(a, b):
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+    assert wrap_diff(y, 0.0) > 90.0, f"real yaw spin suppressed: yaw={y}"
