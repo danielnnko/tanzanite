@@ -181,14 +181,22 @@
   // ── State ──────────────────────────────────────────────────────
   let renderer, scene, camera, controls;
   let earthMesh, satMarker, gsMarker;
-  let trailLine, gndTrackLine, losLine;
+  let trailLine, gndTrackLine, losLine, predOrbitLine;
   let trailPoints = [], gndTrackPoints = [];
+  let orbitPts = [];               // inertial predicted-orbit arc (scene units)
+  const ORBIT_PTS_MAX = 300;
   let animFrameId = null;
   let disposed = false;
 
   let rotationMode = 'realtime'; // 'realtime' | 'demo'
   let earthRotationAngle = 0;
   let lastFrameTime = performance.now();
+  let gmstRad = 0;               // live GMST from the tracking SSE event
+  // The scene mapping uses z = −r·cos(lat)·sin(lon) (see latLonAltToScene),
+  // so a POSITIVE longitude is a NEGATIVE rotation about +Y: the multiplier
+  // below converts GMST (Greenwich east-longitude from the vernal equinox)
+  // into that handedness.
+  const SCENE_LON_SIGN = -1;
 
   let followSat = false;
   let hasGpsFix = false;
@@ -319,7 +327,7 @@
     const satMat = new THREE.MeshBasicMaterial({ color: COLOR_SATELLITE });
     satMarker = new THREE.Mesh(satGeo, satMat);
     satMarker.visible = false;
-    earthMesh.add(satMarker); // child of Earth → rotates with it automatically
+    scene.add(satMarker);   // INERTIAL frame: NOT a child of Earth (§26)
 
     // Glow sprite around satellite
     const satGlowGeo = new THREE.SphereGeometry(1.4, 12, 12);
@@ -342,6 +350,16 @@
       gsPos.normalize().multiplyScalar(EARTH_RADIUS_SCENE + 2.8),
     );
     earthMesh.add(gsMarker);
+
+    // ── Inertial predicted-orbit trail (TLE/SGP4) ───────────────
+    // Real orbit path in inertial space: a near-circle in the orbital plane,
+    // fixed while Earth rotates beneath it.  Fetched from /api/tracking/track.
+    predOrbitLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0x22d3ee, opacity: 0.55, transparent: true }),
+    );
+    predOrbitLine.visible = false;
+    scene.add(predOrbitLine);     // inertial: NOT child of earthMesh
 
     // ── Trail (orbital) ─────────────────────────────────────────
     trailLine = new THREE.Line(
@@ -422,8 +440,48 @@
   }
 
   // ── SSE packet handler ─────────────────────────────────────────
+  // `tracking` event: predicted_position.eci_km (TEME, km) places the
+  // satellite in the inertial frame; gmst rotates the Earth beneath it.
+  TansatStream.on('tracking', function (st) {
+    if (!st || !st.ok) return;
+    if (st.predicted_position && st.predicted_position.eci_km) {
+      const km = st.predicted_position.eci_km;
+      const scale = EARTH_RADIUS_SCENE / EARTH_RADIUS_KM;
+      // TEME +Z ≈ Earth +Z (polar motion omitted): map into scene axes
+      // (scene Y-up; scene X/Z = TEME X/Z, z negated to match the texture
+      // handedness used by latLonAltToScene).
+      satTargetPos.set(km[0] * scale,
+                       km[2] * scale,
+                       -km[1] * scale);
+      // GMST drives the Earth's true orientation (render loop reads this)
+      gmstRad = (typeof st.predicted_position.gmst_deg === 'number')
+        ? st.predicted_position.gmst_deg * Math.PI / 180 : gmstRad;
+      hasGpsFix = true;
+      satMarker.visible = true;
+      document.getElementById('no-fix-overlay').classList.add('hidden');
+
+      // Accumulate the inertial predicted-orbit arc (1 Hz SSE → the ring
+      // fills in once per ~15 min of runtime; visual confirmation that the
+      // orbit plane is FIXED while Earth rotates beneath it).
+      const p = satTargetPos.clone();
+      const last = orbitPts[orbitPts.length - 1];
+      if (!last || last.distanceTo(p) > 0.05) {
+        orbitPts.push(p);
+        if (orbitPts.length > ORBIT_PTS_MAX) orbitPts.shift();
+        const verts = new Float32Array(orbitPts.length * 3);
+        orbitPts.forEach((q, i) => { verts[i*3] = q.x; verts[i*3+1] = q.y; verts[i*3+2] = q.z; });
+        predOrbitLine.geometry.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+        predOrbitLine.geometry.setDrawRange(0, orbitPts.length);
+        predOrbitLine.geometry.computeBoundingSphere();
+        predOrbitLine.visible = orbitPts.length >= 2;
+      }
+    }
+  });
+
+  // ── SSE packet handler (GPS path — Earth-fixed placement) ──────
   TansatStream.on('packet', function (pkt) {
     if (pkt.type !== 'tlm') return;
+    if (!predOrbitLine || typeof gmstRad === 'undefined') return;   // pre-init guard
     currentPkt = pkt;
 
     const lock = !!pkt.gps_lock;
@@ -470,6 +528,10 @@
   });
 
   // ── Render loop ────────────────────────────────────────────────
+  // Earth rotation (§26): Earth-fixed objects live as children of earthMesh,
+  // which rotates by the CURRENT GMST (real-time mode) instead of an
+  // arbitrary accumulating angle.  The satellite lives in the inertial
+  // scene root, so the relative geometry (pass rise/set, LOS) is now real.
   function animate(now) {
     if (disposed) return;
     animFrameId = requestAnimationFrame(animate);
@@ -477,11 +539,13 @@
     const dt = Math.min((now - lastFrameTime) / 1000, 0.1); // cap at 100ms
     lastFrameTime = now;
 
-    // Earth rotation
-    const degPerSec = rotationMode === 'realtime'
-      ? 360 / SIDEREAL_DAY_S
-      : 360 / DEMO_SPEED_S;
-    earthMesh.rotation.y += (degPerSec * Math.PI / 180) * dt;
+    if (rotationMode === 'realtime') {
+      // True orientation: GMST rotates the Greenwich meridian into place.
+      earthMesh.rotation.y = -gmstRad * SCENE_LON_SIGN;
+    } else {
+      // Demo spin (illustrative only — labeled as such in the badge)
+      earthMesh.rotation.y += (360 / DEMO_SPEED_S) * Math.PI / 180 * dt;
+    }
 
     // Smooth satellite position interpolation (no snapping between packets)
     if (hasGpsFix && satMarker.visible) {

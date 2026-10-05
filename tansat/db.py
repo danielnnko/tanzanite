@@ -74,6 +74,103 @@ def init_db(database_url: str) -> None:
                 VALUES (%s, %s)
                 ON CONFLICT (key) DO NOTHING;
                 """, (key, value))
+
+            # ── Orbital tracking subsystem tables ─────────────────────
+            # satellites: the tracked spacecraft registry.
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS satellites (
+                id SERIAL PRIMARY KEY,
+                norad_id INTEGER UNIQUE NOT NULL,
+                name VARCHAR(120),
+                callsign VARCHAR(32),
+                is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """)
+            # tles: append-only element-set history.  A new TLE supersedes
+            # the active one (status flip), never deletes — the full history
+            # enables TLE-age vs error studies after the fact.
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS tles (
+                id SERIAL PRIMARY KEY,
+                satellite_id INTEGER NOT NULL REFERENCES satellites(id) ON DELETE CASCADE,
+                norad_id INTEGER NOT NULL,
+                line1 VARCHAR(80) NOT NULL,
+                line2 VARCHAR(80) NOT NULL,
+                epoch TIMESTAMPTZ NOT NULL,
+                source VARCHAR(32) NOT NULL DEFAULT 'manual',
+                retrieved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                checksum_ok BOOLEAN NOT NULL DEFAULT TRUE,
+                status VARCHAR(16) NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active','superseded','rejected'))
+            );
+            """)
+            cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tles_sat_active
+                ON tles (satellite_id, status);
+            """)
+            # position_fixes: observed positions (GPS telemetry or ORB feed).
+            # raw_lat/raw_lon keep the PRE-filter values so the EMA smoothing
+            # never destroys scientific data.
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS position_fixes (
+                id SERIAL PRIMARY KEY,
+                satellite_id INTEGER REFERENCES satellites(id) ON DELETE CASCADE,
+                fix_time TIMESTAMPTZ NOT NULL,
+                server_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                source VARCHAR(8) NOT NULL CHECK (source IN ('gps','orb')),
+                lat DOUBLE PRECISION NOT NULL,
+                lon DOUBLE PRECISION NOT NULL,
+                alt_m DOUBLE PRECISION,
+                raw_lat DOUBLE PRECISION,
+                raw_lon DOUBLE PRECISION,
+                az DOUBLE PRECISION,
+                el DOUBLE PRECISION,
+                slant_km DOUBLE PRECISION,
+                range_rate_km_s DOUBLE PRECISION,
+                doppler_100mhz DOUBLE PRECISION,
+                rssi DOUBLE PRECISION,
+                snr DOUBLE PRECISION
+            );
+            """)
+            cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_fixes_sat_time
+                ON position_fixes (satellite_id, fix_time);
+            """)
+            # pass_predictions: cached SGP4 pass schedule per TLE.
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS pass_predictions (
+                id SERIAL PRIMARY KEY,
+                satellite_id INTEGER NOT NULL REFERENCES satellites(id) ON DELETE CASCADE,
+                tle_id INTEGER REFERENCES tles(id) ON DELETE CASCADE,
+                aos TIMESTAMPTZ NOT NULL,
+                tca TIMESTAMPTZ,
+                los TIMESTAMPTZ,
+                max_elevation DOUBLE PRECISION,
+                aos_azimuth DOUBLE PRECISION,
+                los_azimuth DOUBLE PRECISION,
+                duration_s DOUBLE PRECISION,
+                min_elevation_mask DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """)
+            cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_passpred_sat_aos
+                ON pass_predictions (satellite_id, aos);
+            """)
+            # Tracking-related operator settings (defaults; admin-editable)
+            tracking_defaults = [
+                ('min_elevation_deg', '0'),
+                ('prediction_horizon_h', '48'),
+                ('tle_stale_hours', '72'),
+                ('tle_max_age_hours', '336'),
+            ]
+            for key, value in tracking_defaults:
+                cur.execute("""
+                INSERT INTO station_settings (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO NOTHING;
+                """, (key, value))
         conn.commit()
 
 @contextmanager

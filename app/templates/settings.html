@@ -113,6 +113,32 @@
                 <button type="submit" class="btn btn-primary">Save TTL</button>
             </form>
         </div>
+
+        <div class="card">
+            <div class="panel-title" style="margin-bottom:12px;">Orbital Elements (TLE)</div>
+            <p class="text-muted" style="font-size:11px; margin-bottom:8px;">
+                Paste a 2-line or 3-line TLE for the tracked satellite (NORAD format). The epoch
+                and checksum are validated on import; the previous element set is kept as history.
+                Sources: CelesTrak (dev), Space-Track (ops), or the mission ops team.
+            </p>
+            <form id="tle-form">
+                <div class="form-group">
+                    <label class="form-label">TLE text</label>
+                    <textarea id="tle-text" class="form-control" rows="3" placeholder="1 25544U 98067A ...&#10;2 25544  51.64 ..." style="font-family:'JetBrains Mono',monospace; font-size:11px;"></textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Source label</label>
+                    <select id="tle-source" class="form-control">
+                        <option value="manual">manual</option>
+                        <option value="celestak">celestak</option>
+                        <option value="space-track">space-track</option>
+                        <option value="mission">mission</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary" id="tle-submit">Import TLE</button>
+                <span id="tle-result" style="margin-left:10px; font-size:12px;"></span>
+            </form>
+        </div>
     </div>
 
     <div class="card">
@@ -120,4 +146,41 @@
         <p class="text-muted" style="font-size:12px;">Theme is a per-browser preference &mdash; use the moon/sun toggle at the bottom of the sidebar.</p>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    'use strict';
+    const form = document.getElementById('tle-form');
+    if (!form) return;
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const out = document.getElementById('tle-result');
+        const btn = document.getElementById('tle-submit');
+        const text = document.getElementById('tle-text').value.trim();
+        const source = document.getElementById('tle-source').value;
+        if (!text) { out.textContent = 'Paste a TLE first.'; out.style.color = 'var(--danger)'; return; }
+        btn.disabled = true; out.textContent = 'Importing\u2026'; out.style.color = 'inherit';
+        fetch('/api/tracking/tle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tle: text, source: source }),
+        })
+        .then(r => r.json().then(j => ({ status: r.status, json: j })))
+        .then(({ status, json }) => {
+            btn.disabled = false;
+            if (status === 200 && json.ok) {
+                out.textContent = (json.duplicate ? 'Already active (duplicate): ' : 'Imported: ')
+                    + 'NORAD ' + json.norad_id + ', epoch ' + json.epoch;
+                out.style.color = 'var(--success)';
+            } else {
+                out.textContent = json.error || ('Import failed (' + status + ')');
+                out.style.color = 'var(--danger)';
+            }
+        })
+        .catch(() => { btn.disabled = false; out.textContent = 'Network error'; out.style.color = 'var(--danger)'; });
+    });
+})();
+</script>
 {% endblock %}

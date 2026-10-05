@@ -31,6 +31,7 @@ import serial.tools.list_ports
 
 from tansat import parser as tlm_parser
 from tansat import physics
+from tansat.orbit import engine as orbit_engine
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,12 @@ class AcquisitionService:
         self._gs_lon  = 39.280427
         self._gs_alt  = 30.0    # metres MSL
         self._alt_offset = 0.0  # calibration offset
+
+        # Orbital tracking engine (created lazily at first ingest — the orbit
+        # package needs the DB, which is initialized by the Flask app factory
+        # before the acquisition service is created; lazy init keeps module
+        # import order irrelevant and unit tests DB-free).
+        self._tracking_engine = None
         # Attitude filter tuning (updated by admin settings)
         self._attitude_alpha = physics.ATTITUDE_ALPHA
         self._gyro_scale   = physics.GYRO_SCALE
@@ -344,6 +351,19 @@ class AcquisitionService:
 
     # ── Configuration ──
 
+    def tracking_engine(self):
+        """Lazily-initialized TrackingEngine (None until DB is available)."""
+        if self._tracking_engine is None:
+            try:
+                self._tracking_engine = orbit_engine.TrackingEngine(data_dir=self.data_dir)
+                self._tracking_engine.update_gs_config(
+                    self._gs_lat, self._gs_lon, self._gs_alt)
+                self._tracking_engine.start()
+            except Exception as e:
+                logger.error("TrackingEngine init failed (tracking disabled): %s", e)
+                self._tracking_engine = None
+        return self._tracking_engine
+
     def update_gs_config(self, gs_lat: float, gs_lon: float,
                           gs_alt: float, alt_offset: float = 0.0) -> None:
         with self._lock:
@@ -351,6 +371,8 @@ class AcquisitionService:
             self._gs_lon     = gs_lon
             self._gs_alt     = gs_alt
             self._alt_offset = alt_offset
+            if self._tracking_engine is not None:
+                self._tracking_engine.update_gs_config(gs_lat, gs_lon, gs_alt)
 
     def update_attitude_config(self, alpha: float, gyro_scale: float) -> None:
         """Update attitude-filter tuning live (no restart needed).
@@ -539,6 +561,9 @@ class AcquisitionService:
             # browser can back-fill the satellite's last known position.
             if ptype == "ORB":
                 self.history.append(packet)
+                eng = self._tracking_engine
+                if eng is not None:
+                    eng.ingest(packet)
 
             # Only process TLM packets through physics
             if ptype == "tlm":
@@ -551,6 +576,10 @@ class AcquisitionService:
 
                 if self._session_log:
                     self._session_log.write(packet)
+
+                eng = self._tracking_engine
+                if eng is not None:
+                    eng.ingest(packet)
 
             self.clients.broadcast("packet", packet)
 

@@ -44,7 +44,7 @@ const TansatStream = (() => {
         _es = new EventSource('/api/stream');
 
         // Handle named events
-        ['status', 'packet', 'raw', 'uplink', 'image', 'control', 'error'].forEach(type => {
+        ['status', 'packet', 'raw', 'uplink', 'image', 'control', 'error', 'tracking'].forEach(type => {
             _es.addEventListener(type, e => {
                 let data;
                 try { data = JSON.parse(e.data); } catch { data = e.data; }

@@ -15,6 +15,12 @@ All /api/* endpoints:
   GET  /api/logs/<name>      — download CSV session log
   GET  /api/logs/<name>.preview — first 50 lines preview
   GET  /api/export/orb.xlsx  — orbit data Excel export
+
+Orbital tracking (read-only except the admin TLE import):
+  GET  /api/tracking/state          — current tracking state snapshot
+  GET  /api/tracking/track?kind=predicted — predicted ground-track polyline
+  GET  /api/tracking/passes?hours=48 — SGP4 pass schedule
+  POST /api/tracking/tle            — admin TLE import (validated + audited)
 """
 
 import io
@@ -31,6 +37,8 @@ from flask_login import current_user, login_required
 from tansat import acquisition as acq_svc
 from tansat import db as tansat_db
 from tansat.auth import require_role
+from tansat.orbit.engine import json_safe
+from tansat.orbit.tles import TleError
 
 api_bp = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
@@ -311,6 +319,84 @@ def images_download(name: str):
     if not path.exists():
         abort(404)
     return send_file(path, as_attachment=False, download_name=name)
+
+
+# ── Orbital tracking ───────────────────────────────────────────────
+def _tracking_engine():
+    """The acquisition service's tracking engine (may be None if DB-less)."""
+    return _service().tracking_engine()
+
+
+@api_bp.route("/tracking/state")
+@login_required
+def tracking_state():
+    eng = _tracking_engine()
+    if eng is None:
+        return ok(source="none", available=False)
+    return ok(available=True, **json_safe(eng.get_state()))
+
+
+@api_bp.route("/tracking/track")
+@login_required
+def tracking_track():
+    eng = _tracking_engine()
+    if eng is None:
+        return ok(available=False, segments=[])
+    kind = request.args.get("kind", "predicted")
+    if kind != "predicted":
+        return err("unknown track kind", 400)
+    track = eng.get_predicted_track(force=request.args.get("force") == "1")
+    if track is None:
+        return ok(available=False, reason="no_valid_tle", segments=[])
+    return ok(available=True, **json_safe(track))
+
+
+@api_bp.route("/tracking/passes")
+@login_required
+def tracking_passes():
+    eng = _tracking_engine()
+    if eng is None:
+        return ok(available=False, passes=[])
+    hours = request.args.get("hours", 48, type=float)
+    hours = min(max(hours, 1.0), 168.0)   # clamp 1 h … 7 d
+    return ok(available=True, passes=eng.get_passes(hours=hours))
+
+
+@api_bp.route("/tracking/tle", methods=["POST"])
+@login_required
+@require_role("admin")
+def tracking_tle_import():
+    """Admin TLE import.  The ONLY write endpoint in the tracking subsystem.
+    Validated by tles.parse_tle (checksum + element sanity) and audited."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("tle") or "").strip()
+    source = (data.get("source") or "manual").strip()
+    if not text:
+        return err("tle text is required")
+    if len(text) > 500:
+        return err("tle text too long")
+    if len(source) > 32:
+        return err("source label too long")
+    eng = _tracking_engine()
+    if eng is None:
+        return err("tracking engine unavailable", 503)
+    try:
+        result = eng.import_tle(text, source, actor=current_user.username)
+    except TleError as e:
+        tansat_db.audit(
+            actor_username=current_user.username,
+            action="tle_import_rejected",
+            source_ip=request.remote_addr,
+            detail=str(e),
+        )
+        return err(f"Invalid TLE: {e}", 400)
+    return ok(
+        imported=True,
+        duplicate=result.get("duplicate", False),
+        norad_id=result["satnum"],
+        epoch=result["epoch"].isoformat(),
+        name=result.get("name"),
+    )
 
 
 # ── Orbit Excel export ───────────────────────────────────────────────

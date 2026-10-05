@@ -71,6 +71,12 @@
     background: var(--danger-chip); color: var(--danger);
     border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
   }
+  .badge-tle {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    padding: 2px 6px; border-radius: 4px;
+    background: color-mix(in srgb, #22d3ee 12%, transparent); color: #22d3ee;
+    border: 1px solid color-mix(in srgb, #22d3ee 40%, transparent);
+  }
   .text-ok   { color: #00e6a0; }
   .text-bad  { color: #ff4d6a; }
   .text-warn { color: #ffb020; }
@@ -88,6 +94,8 @@
   .lg-dot    { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
   .lg-line   { width: 16px; height: 0; border-top: 2px dashed #00e6a0; display: inline-block; }
   .lg-track  { width: 16px; height: 0; border-top: 2px solid #4f7cff; display: inline-block; }
+  .lg-pred   { width: 16px; height: 0; border-top: 2px dashed #22d3ee; display: inline-block; }
+  .lg-foot   { width: 12px; height: 12px; border-radius: 50%; border: 1px dashed #22d3ee; display: inline-block; }
 
   /* ── No-fix banner (top-center) ─────────────────────────────────────── */
   .map-nofix {
@@ -132,9 +140,17 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg>
       Center GS
     </button>
-    <button class="map-btn" id="btn-track" title="Toggle satellite ground track">
+    <button class="map-btn" id="btn-track" title="Toggle observed track (GPS/ORB positions received)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c3-6 7-6 10 0s7 6 10 0"/></svg>
-      Track
+      Observed
+    </button>
+    <button class="map-btn" id="btn-pred" title="Toggle predicted track (TLE/SGP4)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c3-6 7-6 10 0s7 6 10 0" stroke-dasharray="3 3"/></svg>
+      Predicted
+    </button>
+    <button class="map-btn" id="btn-foot" title="Toggle coverage footprint (elevation-mask circle)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="4 3"/></svg>
+      Footprint
     </button>
     <button class="map-btn" id="btn-follow" title="Keep map centered on satellite">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L9 15"/><path d="M21 3l-7 18-3-7-7-3z"/></svg>
@@ -168,6 +184,11 @@
     <div class="divider"></div>
     <div class="info-row"><span class="k">Position Src</span> <span class="v" id="info-src">&mdash;</span></div>
     <div class="info-row"><span class="k">Last Update</span>  <span class="v" id="info-age">&mdash;</span></div>
+    <div class="info-row"><span class="k">TLE Age</span>    <span class="v" id="info-tle">&mdash;</span></div>
+    <div class="divider"></div>
+    <div class="info-row"><span class="k">Next AOS</span>   <span class="v" id="info-aos">&mdash;</span></div>
+    <div class="info-row"><span class="k">Max El</span>     <span class="v" id="info-maxel">&mdash;</span></div>
+    <div class="info-row"><span class="k">GPS&minus;Model</span> <span class="v" id="info-err">&mdash;</span></div>
   </div>
 
   <!-- Legend -->
@@ -175,7 +196,9 @@
     <span class="item"><span style="display:inline-flex;vertical-align:middle;" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4f7cff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a9 9 0 0118 0"/><path d="M12 15v6"/><path d="M8 21h8"/><path d="M12 15L20 6"/><circle cx="12" cy="15" r="1.8" fill="#4f7cff" stroke="none"/></svg></span> Ground Station</span>
     <span class="item"><span class="lg-dot" style="background:#ec4899;"></span> Satellite</span>
     <span class="item"><span class="lg-line"></span> LOS Link</span>
-    <span class="item"><span class="lg-track"></span> Ground Track</span>
+    <span class="item"><span class="lg-track"></span> Observed</span>
+    <span class="item"><span class="lg-pred"></span> Predicted</span>
+    <span class="item"><span class="lg-foot"></span> Footprint</span>
   </div>
 </div>
 {% endblock %}
@@ -212,7 +235,8 @@
     lat: $('info-lat'), lon: $('info-lon'), alt: $('info-alt'),
     az: $('info-az'), el: $('info-el'), range: $('info-range'),
     src: $('info-src'), age: $('info-age'), state: $('badge-state'),
-    nofix: $('map-nofix'),
+    nofix: $('map-nofix'), tle: $('info-tle'), aos: $('info-aos'),
+    maxel: $('info-maxel'), err: $('info-err'),
   };
 
   // ── Map init (CartoDB Dark Matter tiles) ─────────────────────────────
@@ -229,7 +253,7 @@
     maxZoom: 19,
   }).addTo(map);
 
-  // ── Layers ───────────────────────────────────────────────────────────
+  // ── Layers (architecture §23) ─────────────────────────────────────────
   // Ground station: brand dish marker (same symbol as every other map) + halo
   const gsHalo = L.circleMarker([GS_LAT, GS_LON], {
     radius: 16, color: TansatGS.color, weight: 1, opacity: 0.35, fillOpacity: 0.06,
@@ -256,17 +280,31 @@
     color: '#4f7cff', weight: 2, opacity: 0.85,
   }).addTo(map);
 
+  // Predicted track (TLE/SGP4): multi-polyline, dashed cyan; drawn from the
+  // pre-split segments served by /api/tracking/track.
+  const predTrack = L.polyline([], {
+    color: '#22d3ee', weight: 2, dashArray: '6,6', opacity: 0.75,
+  });
+
+  // Coverage footprint (elevation-mask circle; L.Circle is geodesic)
+  const footprint = L.circle([0, 0], {
+    radius: 1, color: '#22d3ee', weight: 1, dashArray: '4,4',
+    fillColor: '#22d3ee', fillOpacity: 0.04, opacity: 0.5,
+  });
+
   // ── State ────────────────────────────────────────────────────────────
   const MAX_TRACK = 400;
   const track = [];          // [lat, lon] pairs
   let lastFix = null;        // {lat, lon, altM, az, el, rangeKm, src, ts}
   let followSat = false;
   let trackVisible = true;
+  let predVisible = true;
+  let footVisible = false;
   let linkLive = false;      // acquisition running?
 
   // ── UI helpers ───────────────────────────────────────────────────────
   function setBadge(mode) {
-    // mode: 'gps' | 'orb' | 'nogps' | 'none'
+    // mode: 'gps' | 'orb' | 'nogps' | 'tle' | 'none'
     const b = els.state;
     if (mode === 'gps' || mode === 'orb') {
       b.textContent = mode === 'gps' ? 'LIVE · GPS' : 'LIVE · ORB';
@@ -274,6 +312,9 @@
     } else if (mode === 'nogps') {
       b.textContent = 'ORB POS · GPS NO-FIX';
       b.className = 'badge-warn';
+    } else if (mode === 'tle') {
+      b.textContent = 'TLE PREDICTION';
+      b.className = 'badge-tle';
     } else {
       b.textContent = linkLive ? 'NO POSITION' : 'NO SIGNAL';
       b.className = 'badge-nofix';
@@ -304,8 +345,13 @@
     // Pulse ring: gentle radius oscillation on each new fix
     satRing.setRadius(10 + 6 * Math.abs(Math.sin(Date.now() / 600)));
 
-    // Ground track (append only if moved meaningfully — reduces noise)
-    if (!prev || Math.abs(prev.lat - fix.lat) > 1e-5 || Math.abs(prev.lon - fix.lon) > 1e-5) {
+    // Observed track (append only if moved meaningfully — reduces noise).
+    // Predicted (TLE) positions are NEVER appended to the observed trail —
+    // model output and observations stay visually distinct (§46).
+    // setLatLngs on a plain array splits automatically at antimeridian
+    // crossings (Leaflet detects the >180° jump), so no manual slicing.
+    if (fix.obs !== false
+        && (!prev || Math.abs(prev.lat - fix.lat) > 1e-5 || Math.abs(prev.lon - fix.lon) > 1e-5)) {
       track.push(pos);
       if (track.length > MAX_TRACK) track.shift();
       if (trackVisible) groundTrack.setLatLngs(track);
@@ -331,7 +377,9 @@
     els.az.textContent   = (fix.az  != null ? fix.az  : 0).toFixed(1) + '\u00b0';
     els.el.textContent   = (fix.el  != null ? fix.el  : 0).toFixed(1) + '\u00b0';
     els.range.textContent = (fix.rangeKm != null ? fix.rangeKm : 0).toFixed(2) + ' km';
-    els.src.textContent  = fix.src === 'gps' ? 'Onboard GPS' : 'ORB Propagator';
+    els.src.textContent  = fix.src === 'gps' ? 'Onboard GPS'
+                         : fix.src === 'orb' ? 'ORB Propagator'
+                         : 'TLE / SGP4';
     els.age.textContent  = 'just now';
 
     setBanner(false);
@@ -357,6 +405,63 @@
     els.alt.textContent = '\u2014';
     setBanner(true);
     setBadge('none');
+  }
+
+  // ── Tracking-engine events (1 Hz, from tansat/orbit/engine.py) ──────
+  // Renders the arbitrated state: source badge, predicted position when the
+  // TLE is the authoritative source, next pass, TLE age, GPS-vs-model error,
+  // and the coverage footprint.  Never overrides fresher packet data.
+  function handleTracking(st) {
+    if (!st || !st.ok) return;
+
+    // TLE age row (staleness awareness, §11)
+    if (st.tle) {
+      const ageH = st.tle.age_h;
+      const ageTxt = ageH < 48 ? ageH.toFixed(1) + ' h'
+                   : (ageH / 24).toFixed(1) + ' d';
+      els.tle.textContent = ageTxt;
+      els.tle.style.color = (st.tle.status === 'fresh') ? 'var(--success)'
+                          : (st.tle.status === 'aging') ? 'var(--warning)'
+                          : '#ff4d6a';
+    } else {
+      els.tle.textContent = '\u2014';
+    }
+
+    // Next-pass rows (SGP4 prediction; ORB's own AOS fields still win the
+    // 'packet' display path — this row is the ground-station model view)
+    if (st.next_pass) {
+      const d = new Date(st.next_pass.aos);
+      els.aos.textContent = d.toISOString().substr(11, 5) + 'Z';
+      els.maxel.textContent = st.next_pass.max_elevation_deg != null
+        ? st.next_pass.max_elevation_deg.toFixed(1) + '\u00b0' : '\u2014';
+    }
+
+    // GPS-vs-model error (only meaningful when GPS is the live source)
+    if (st.gp_error && lastFix && lastFix.src === 'gps') {
+      const km = st.gp_error.ground_km;
+      els.err.textContent = km < 10 ? km.toFixed(2) + ' km' : km.toFixed(0) + ' km';
+      els.err.style.color = km < 5 ? 'var(--success)' : km < 25 ? 'var(--warning)' : '#ff4d6a';
+    }
+
+    // Predicted position becomes the DISPLAYED position only when the engine
+    // says the TLE is the authoritative source (GPS/ORB stale/expired).
+    if (st.source === 'tle' && st.position) {
+      applyFix({
+        lat: st.position.lat, lon: st.position.lon,
+        altM: st.position.alt_m || 0,
+        az: st.geometry ? st.geometry.az : 0,
+        el: st.geometry ? st.geometry.el : 0,
+        rangeKm: st.geometry ? st.geometry.range_km : 0,
+        src: 'tle', obs: false,
+      });
+    }
+
+    // Coverage footprint (geometric/visibility circle from the engine)
+    if (st.footprint && footVisible) {
+      footprint.setLatLng(st.footprint.center);
+      footprint.setRadius(Math.max(st.footprint.radius_km * 1000, 1));
+      if (!map.hasLayer(footprint)) footprint.addTo(map);
+    }
   }
 
   // ── Packet routing ───────────────────────────────────────────────────
@@ -439,6 +544,26 @@
     if (followSat && lastFix) map.panTo([lastFix.lat, lastFix.lon]);
   });
 
+  const btnPred = $('btn-pred');
+  btnPred.classList.add('active');            // predicted shown by default
+  btnPred.addEventListener('click', () => {
+    predVisible = !predVisible;
+    btnPred.classList.toggle('active', predVisible);
+    if (predVisible) {
+      if (predHasData) predTrack.addTo(map);
+    } else {
+      map.removeLayer(predTrack);
+    }
+  });
+
+  const btnFoot = $('btn-foot');
+  btnFoot.addEventListener('click', () => {
+    footVisible = !footVisible;
+    btnFoot.classList.toggle('active', footVisible);
+    if (!footVisible) map.removeLayer(footprint);
+    // Re-shown on the next 1 Hz tracking event (position comes from there)
+  });
+
   // ── Wiring: initial snapshot + live stream ───────────────────────────
   fetch('/api/status').then(r => r.json()).then(updateStatus).catch(() => {});
 
@@ -461,7 +586,30 @@
   if (window.TansatStream) {
     TansatStream.on('packet', handlePacket);
     TansatStream.on('status', updateStatus);
+    TansatStream.on('tracking', handleTracking);
   }
+
+  // ── Predicted track + tracking-state bootstrap (architecture §7/§9) ─
+  let predHasData = false;
+  fetch('/api/tracking/track')
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.ok && res.available) {
+        const segs = [...(res.future_segments || []), ...(res.past_segments || [])];
+        const ll = segs.map(seg => seg.map(p => [p[0], p[1]]));
+        if (ll.length && ll.some(s => s.length >= 2)) {
+          predTrack.setLatLngs(ll);
+          predHasData = true;
+          if (predVisible) predTrack.addTo(map);
+        }
+      }
+    })
+    .catch(() => {});
+
+  fetch('/api/tracking/state')
+    .then(r => r.json())
+    .then(st => { if (st && st.ok) handleTracking(st); })
+    .catch(() => {});
 
   // Sanity log (helps ops diagnose blank-map reports)
   console.log('[TANZANITESAT Map] init — GS:', GS_LAT, GS_LON,

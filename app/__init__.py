@@ -79,6 +79,14 @@ def create_app(config: dict | None = None) -> Flask:
     except (ValueError, TypeError) as e:
         logging.warning("Failed to sync attitude tuning from DB: %s", e)
 
+    # ── Orbital tracking engine ────────────────────────────────────
+    # Started lazily via svc.tracking_engine() on first use; here we start
+    # it eagerly so the 1 Hz tracking SSE stream begins with the app.
+    try:
+        svc.tracking_engine()
+    except Exception as e:
+        logging.warning("Tracking engine failed to start: %s", e)
+
     # ── Flask-Login ───────────────────────────────────────────────
     tansat_auth.login_manager.login_view = "auth.login"
     tansat_auth.login_manager.login_message_category = "warning"
