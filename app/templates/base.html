@@ -62,7 +62,7 @@
                         <span class="label">Pass Schedules</span>
                     </a>
                 </div>
-                {% if current_user and current_user.role == 'admin' %}
+                {% if current_user and current_user.role in ('admin', 'operator') %}
                 <div class="nav-item">
                     <a href="/admin/nodes" class="{{ 'active' if request.path == '/admin/nodes' }}">
                         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15a8 8 0 0116 0"/><path d="M12 15v6M9 21h6"/><circle cx="12" cy="15" r="1.4" fill="currentColor" stroke="none"/></svg>

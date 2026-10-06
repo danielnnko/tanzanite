@@ -21,6 +21,33 @@ import logging
 import os
 import sys
 
+# ── Re-exec into the project venv if dependencies are missing ──────
+# Users often launch with the system Python ("python run.py"), which lacks
+# the project's packages (sgp4, flask, ...). If this interpreter can't see
+# them but the local .venv can, transparently restart inside the venv.
+_venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv")
+
+
+def _has_project_deps() -> bool:
+    """Probe for a project dependency without importing it.
+
+    Deliberately no import: Pylance/type-checkers running against the system
+    interpreter must not see an unresolvable top-level import here.
+    """
+    import importlib.util
+    return importlib.util.find_spec("sgp4") is not None
+
+
+try:
+    if not _has_project_deps():
+        raise ImportError("sgp4 not resolvable in this interpreter")
+except ImportError:
+    _venv_python = (os.path.join(_venv_dir, "bin", "python") if os.name != "nt"
+                    else os.path.join(_venv_dir, "Scripts", "python.exe"))
+    if os.path.isfile(_venv_python):
+        os.execv(_venv_python, [_venv_python, os.path.abspath(__file__), *sys.argv[1:]])
+    # No venv present: fall through and let the app's own imports fail below.
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

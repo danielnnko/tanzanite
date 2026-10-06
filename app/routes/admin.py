@@ -172,7 +172,7 @@ def settings():
 # ── Node Manager ────────────────────────────────────────────────────
 @admin_bp.route("/nodes", methods=["GET", "POST"])
 @login_required
-@require_role("admin")
+@require_role("admin", "operator")   # operators may run the antenna console; uplink still needs the control lock
 def nodes():
     uplink_result = None
     if request.method == "POST":
